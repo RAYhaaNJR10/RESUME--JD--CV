@@ -1,10 +1,12 @@
-# services/docx_generator.py
-
 import os
+
 from docx import Document
 
 
-def generate_docx(cv_json, output_path):
+def generate_docx(
+    cv_json,
+    output_path
+):
 
     document = Document()
 
@@ -12,27 +14,38 @@ def generate_docx(cv_json, output_path):
     # Candidate Details
     # ==========================================
 
-    document.add_heading("Candidate Details", level=1)
+    document.add_heading(
+        "Candidate Details",
+        level=1
+    )
 
     document.add_paragraph(
-        f"Candidate Full Name: {cv_json.get('candidate_name', '')}"
+        f"Candidates Full Name: "
+        f"{cv_json.get('candidate_name', '')}"
     )
 
-    role = ""
-
-    experiences = cv_json.get(
-        "professional_experience",
-        []
+    current_role = cv_json.get(
+        "current_role_title",
+        ""
     )
 
-    if experiences:
-        role = experiences[0].get(
-            "role",
-            ""
+    if not current_role:
+
+        experiences = cv_json.get(
+            "professional_experience",
+            []
         )
 
+        if experiences:
+
+            current_role = experiences[0].get(
+                "role",
+                ""
+            )
+
     document.add_paragraph(
-        f"Current Role: {role}"
+        f"Candidates Current Role Title: "
+        f"{current_role}"
     )
 
     # ==========================================
@@ -40,7 +53,8 @@ def generate_docx(cv_json, output_path):
     # ==========================================
 
     about = cv_json.get(
-        "about_candidate"
+        "about_candidate",
+        ""
     )
 
     if about:
@@ -70,15 +84,38 @@ def generate_docx(cv_json, output_path):
             level=1
         )
 
+        table = document.add_table(
+            rows=1,
+            cols=2
+        )
+
+        table.style = "Table Grid"
+
+        header = table.rows[0].cells
+
+        header[0].text = "Strength"
+        header[1].text = "Score (1-5)"
+
         for strength in strengths:
 
-            document.add_paragraph(
-                strength,
-                style="List Bullet"
+            row = table.add_row().cells
+
+            row[0].text = str(
+                strength.get(
+                    "strength",
+                    ""
+                )
+            )
+
+            row[1].text = str(
+                strength.get(
+                    "score",
+                    ""
+                )
             )
 
     # ==========================================
-    # Professional Experience
+    # Experience
     # ==========================================
 
     experiences = cv_json.get(
@@ -97,19 +134,29 @@ def generate_docx(cv_json, output_path):
         )
 
         document.add_paragraph(
-            f"Company: {exp.get('company', '')}"
+            f"Name of company/client: "
+            f"{exp.get('company', '')}"
         )
 
         document.add_paragraph(
-            f"Project Name: {exp.get('project', '')}"
+            f"Project Name: "
+            f"{exp.get('project', '')}"
         )
 
         document.add_paragraph(
-            f"Role: {exp.get('role', '')}"
+            f"Role Title performed: "
+            f"{exp.get('role', '')}"
         )
 
         document.add_paragraph(
-            f"Role Summary: {exp.get('role_summary', '')}"
+            "Role Summary:"
+        )
+
+        document.add_paragraph(
+            exp.get(
+                "role_summary",
+                ""
+            )
         )
 
         achievements = exp.get(
@@ -136,7 +183,7 @@ def generate_docx(cv_json, output_path):
 
     technical_skills = cv_json.get(
         "technical_skills",
-        {}
+        []
     )
 
     if technical_skills:
@@ -146,17 +193,34 @@ def generate_docx(cv_json, output_path):
             level=1
         )
 
-        for category, skills in technical_skills.items():
+        table = document.add_table(
+            rows=1,
+            cols=2
+        )
 
-            if not skills:
-                continue
+        table.style = "Table Grid"
 
-            document.add_paragraph(
-                f"{category}:"
+        header = table.rows[0].cells
+
+        header[0].text = "Technology Area"
+        header[1].text = "Skills"
+
+        for item in technical_skills:
+
+            row = table.add_row().cells
+
+            row[0].text = str(
+                item.get(
+                    "technology_area",
+                    ""
+                )
             )
 
-            document.add_paragraph(
-                ", ".join(skills)
+            row[1].text = ", ".join(
+                item.get(
+                    "skills",
+                    []
+                )
             )
 
     # ==========================================
@@ -177,32 +241,55 @@ def generate_docx(cv_json, output_path):
 
         for edu in education:
 
-            document.add_paragraph(
-                f"{edu.get('degree', '')}"
-            )
-
-            document.add_paragraph(
-                f"{edu.get('institution', '')}"
-            )
-
-            start_year = edu.get(
-                "start_year",
+            degree = edu.get(
+                "degree",
                 ""
             )
 
-            end_year = edu.get(
-                "end_year",
+            institution = edu.get(
+                "institution",
                 ""
+            )
+
+            start_year = str(
+                edu.get(
+                    "start_year",
+                    ""
+                )
+            )
+
+            end_year = str(
+                edu.get(
+                    "end_year",
+                    ""
+                )
+            )
+
+            document.add_paragraph(
+                degree
             )
 
             if start_year or end_year:
 
                 document.add_paragraph(
+                    f"{institution} | "
                     f"{start_year} - {end_year}"
                 )
 
+            else:
+
+                document.add_paragraph(
+                    institution
+                )
+
+    # ==========================================
+    # Save
+    # ==========================================
+
     os.makedirs(
-        os.path.dirname(output_path),
+        os.path.dirname(
+            output_path
+        ),
         exist_ok=True
     )
 

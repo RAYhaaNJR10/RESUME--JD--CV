@@ -4,19 +4,25 @@ from services.cv_generator import (
 )
 
 candidate = parse_resume(
-    "uploads/resumes/Adarsh_CV.pdf"
+    "uploads/resumes/Kollu Pavani_Autosys.docx"
 )
 
 jd = """
-Senior AWS Engineer
+Production Support Engineer
 
-AWS Glue
-Athena
-Iceberg
-PySpark
-Data Lakehouse
-Kinesis
-Lambda
+Autosys
+Control-M
+CAWA
+TWS
+Unix
+Linux
+Shell Scripting
+
+Incident Management
+Problem Management
+Batch Monitoring
+Production Support
+ITIL
 """
 
 result = generate_client_cv_json(

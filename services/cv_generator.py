@@ -31,57 +31,42 @@ IMPORTANT RULES:
    - skills
    - education
    - certifications
+   - awards
 
-3. Never generate placeholders.
-
-4. Never generate:
+3. Never generate:
    - N/A
    - Not Available
    - Not Mentioned
 
-5. Do NOT create empty sections.
+4. Do NOT create empty sections.
 
-6. If a section has no data, omit it completely.
+5. Keep each project separate.
 
-7. If a candidate has only 2 experiences,
-   return only 2 experiences.
+6. Do NOT merge projects.
 
-8. Keep each project/engagement as a separate professional experience.
+7. Focus heavily on information relevant to the Job Description.
 
-9. Do NOT merge experiences even if:
-   - company is the same
-   - role is the same
-   - technologies are similar
+8. Return ONLY valid JSON.
 
-10. Preserve project-level granularity.
+9. This is a CLIENT-FACING CV.
 
-11. If candidate has 6 projects,
-    return 6 professional_experience entries.
-
-12. If candidate has 2 projects,
-    return 2 professional_experience entries.
-
-13. Do not create empty experience sections.
-
-14. Avoid repeating identical achievements across experiences where possible,
-    but keep experiences separate.
-
-15. Focus on information relevant to the Job Description.
-
-16. Write concise recruiter-friendly content.
-
-17. Technical skills must be grouped into categories.
-
-18. Return ONLY valid JSON.
+10. Prioritize business value and outcomes over technical implementation details.
 
 OUTPUT SCHEMA:
 
 {{
     "candidate_name": "",
 
+    "current_role_title": "",
+
     "about_candidate": "",
 
-    "strengths": [],
+    "strengths": [
+        {{
+            "strength": "",
+            "score": 1
+        }}
+    ],
 
     "professional_experience": [
         {{
@@ -93,15 +78,12 @@ OUTPUT SCHEMA:
         }}
     ],
 
-    "technical_skills": {{
-        "Cloud": [],
-        "Data Engineering": [],
-        "Programming": [],
-        "Databases": [],
-        "DevOps": [],
-        "Analytics": [],
-        "Other": []
-    }},
+    "technical_skills": [
+        {{
+            "technology_area": "",
+            "skills": []
+        }}
+    ],
 
     "education": [
         {{
@@ -115,63 +97,121 @@ OUTPUT SCHEMA:
 
 ABOUT_CANDIDATE:
 
-- 4 to 8 lines
-- Professional summary
-- Highlight years of experience
-- Highlight relevant technologies
-- Highlight domain expertise
-- Align to the JD
+- 4 to 6 recruiter-facing lines.
+- Mention years of experience.
+- Mention domain expertise.
+- Mention major technologies.
+- Mention business impact.
+- Align to the Job Description.
 
 STRENGTHS:
 
-- 5 to 8 bullet points
-- Most relevant strengths only
+Return EXACTLY 5 strengths.
+
+Format:
+
+[
+    {{
+        "strength": "",
+        "score": 1
+    }}
+]
+
+Rules:
+
+- Strengths must be capabilities, not technologies.
+- Do NOT use AWS, Python, SQL, Linux etc as strengths.
+- Use realistic scores.
+- Most experienced candidates should have a mix of 4 and 5.
+
+Examples:
+
+- Production Support Operations
+- Root Cause Analysis
+- Incident & Problem Management
+- Data Engineering Architecture
+- Cloud Platform Engineering
+- ETL Pipeline Development
+- Performance Optimization
+- Stakeholder Communication
+- Data Governance
+- Application Support
+- Service Management
 
 PROFESSIONAL_EXPERIENCE:
 
-- Keep each project as a separate experience entry.
-- Do not merge projects.
-- Each experience must contain:
-    - company
-    - project
-    - role
-    - role_summary
-    - key_achievements
+- Keep every project separate.
+- Never merge projects.
+- Role Summary must be 3-4 concise recruiter-facing sentences.
+- Focus on:
+    - Business objective
+    - Business problem solved
+    - Solution delivered
+    - Business outcome
 
-- Focus on business impact.
-- Focus on technologies relevant to the JD.
-- Summarize lengthy responsibilities into concise achievements.
+PROJECT DIFFERENTIATION RULES:
 
-TECHNICAL_SKILLS RULES:
+If multiple projects contain similar technologies:
 
-- Include only skills relevant to the JD.
-- Remove redundant skills.
+- Keep all projects separate.
+- Avoid repeating the same technology description.
+- Focus on different business outcomes.
+- Focus on stakeholders, reporting, compliance, analytics, operations and business value.
 
-Maximum skills per category:
+KEY ACHIEVEMENTS:
 
-- Cloud: 8
-- Data Engineering: 10
-- Programming: 5
-- Databases: 5
-- DevOps: 5
-- Analytics: 5
-- Other: 5
+- Maximum 5 bullets per project.
+- Focus on business impact first.
+- Avoid low-level implementation details.
+- Use concise recruiter-friendly language.
 
-Group skills logically.
+TECHNICAL SKILLS:
 
-Example:
+Return as technology areas.
 
-"Cloud": [
-    "AWS",
-    "Azure"
-]
+Rules:
 
-"Programming": [
-    "Python",
-    "SQL"
-]
+- Maximum 8 categories.
+- Maximum 8 skills per category.
+- Only include strongest and most relevant skills.
 
-Do not dump all skills into one list.
+Preferred Categories:
+
+- Cloud Platforms
+- Data Engineering
+- Big Data Technologies
+- Database Technologies
+- Programming Languages
+- Governance & Security
+- CI/CD Tools
+- Analytics & Reporting
+- Monitoring & Support
+- Scheduling & Automation
+
+Do NOT create:
+
+- Business Domains
+- Domain Knowledge
+- Industry Experience
+- Functional Areas
+
+Domain knowledge belongs in:
+
+- About Candidate
+- Professional Experience
+
+EDUCATION:
+
+- Return actual education only.
+- Return highest completed degree only.
+- Do not include:
+    - High School
+    - Intermediate
+    - Secondary School
+    - 10th Grade
+    - 12th Grade
+
+unless no higher education exists.
 
 JOB DESCRIPTION:
 
@@ -199,4 +239,14 @@ CANDIDATE PROFILE:
         content = content.replace("```", "")
         content = content.strip()
 
-    return content
+    try:
+        return json.loads(content)
+
+    except Exception as e:
+
+        print("CV JSON Parse Error:", e)
+        print(content)
+
+        raise Exception(
+            "Failed to parse generated CV JSON"
+        )
