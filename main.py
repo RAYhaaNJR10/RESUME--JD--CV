@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 import json
 import os
@@ -9,6 +9,8 @@ import zipfile
 from services.matcher import match_candidates
 from services.cv_generator import generate_client_cv_json
 from services.docx_generator import generate_docx
+from services.comparison_service import compare_candidates
+from services.jd_extractor import extract_jd_text
 
 
 app = FastAPI(
@@ -27,6 +29,7 @@ app.add_middleware(
 
 PARSED_JSON_FOLDER = "parsed_json"
 GENERATED_CVS_FOLDER = "generated_cvs"
+JD_UPLOAD_FOLDER = "uploads/jds"
 
 
 @app.get("/")
@@ -156,6 +159,121 @@ def get_candidate_details(
         candidate = json.load(f)
 
     return candidate
+
+
+@app.post(
+    "/upload-jd",
+    response_class=PlainTextResponse
+)
+async def upload_jd(
+    file: UploadFile = File(...)
+):
+
+    if not file.filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="JD file is required"
+        )
+
+    os.makedirs(
+        JD_UPLOAD_FOLDER,
+        exist_ok=True
+    )
+
+    safe_filename = os.path.basename(
+        file.filename
+    )
+
+    file_path = os.path.join(
+        JD_UPLOAD_FOLDER,
+        safe_filename
+    )
+
+    content = await file.read()
+
+    if not content:
+
+        raise HTTPException(
+            status_code=400,
+            detail="JD file is empty"
+        )
+
+    with open(
+        file_path,
+        "wb"
+    ) as f:
+
+        f.write(
+            content
+        )
+
+    try:
+
+        return extract_jd_text(
+            file_path
+        )
+
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    finally:
+
+        if os.path.exists(
+            file_path
+        ):
+            os.remove(
+                file_path
+            )
+
+
+@app.post("/compare-candidates")
+def compare_selected_candidates(
+    payload: dict
+):
+
+    candidate_names = payload.get(
+        "candidate_names",
+        []
+    )
+
+    jd_text = payload.get(
+        "jd",
+        ""
+    )
+
+    if not candidate_names:
+
+        raise HTTPException(
+            status_code=400,
+            detail="No candidates selected"
+        )
+
+    if not jd_text:
+
+        raise HTTPException(
+            status_code=400,
+            detail="JD text is required"
+        )
+
+    comparison = compare_candidates(
+        candidate_names,
+        jd_text,
+        PARSED_JSON_FOLDER
+    )
+
+    if not comparison["results"]:
+
+        raise HTTPException(
+            status_code=404,
+            detail="No matching candidates found"
+        )
+
+    return comparison
 
 
 @app.post("/generate-selected-cvs")
