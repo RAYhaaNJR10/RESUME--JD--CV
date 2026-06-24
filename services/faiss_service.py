@@ -149,7 +149,6 @@ def rebuild_index_from_parsed_json(parsed_json_folder="parsed_json"):
         except Exception as e:
             print(f"Error saving cache: {e}")
 
-
 def search_candidates(query_embedding, top_k=10):
 
     index = load_index()
