@@ -1,0 +1,22 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Embeddings
+embeddings/*.faiss
+embeddings/*.json
+
+# Uploaded resumes
+uploads/resumes/
+
+# Generated outputs
+generated_cvs/
+parsed_json/
+
+# VS Code
+.vscode/
+.venv/
+uploads/

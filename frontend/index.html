@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recruiter AI Workspace</title>
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- LEFT WORKFLOW SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fa-solid fa-wand-magic-sparkles logo-icon"></i>
+                    <span>Recruiter AI</span>
+                </div>
+                <span class="badge badge-accent">v1.2</span>
+            </div>
+
+            <div class="sidebar-scroll">
+                <!-- SECTION 1: CANDIDATE RESUMES -->
+                <section class="sidebar-section">
+                    <div class="section-title">
+                        <span class="step-num">1</span>
+                        <h3>Candidate Resumes</h3>
+                    </div>
+                    <p class="section-desc">Upload multiple PDF/DOCX resumes to parse & index them.</p>
+                    
+                    <div class="dropzone" id="resumes-dropzone">
+                        <input type="file" id="resumes-input" multiple accept=".pdf,.docx" hidden>
+                        <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+                        <p class="drop-text">Drag & drop files or <span>browse</span></p>
+                        <span class="file-limits">PDF, DOCX formats supported</span>
+                    </div>
+
+                    <div id="resumes-status" class="status-panel">
+                        <div class="status-header">
+                            <span class="status-title"><i class="fa-solid fa-circle-nodes"></i> Upload Status</span>
+                            <span id="indexed-count" class="count-badge">0 candidates</span>
+                        </div>
+                        <ul id="upload-list" class="upload-list">
+                            <!-- Items added dynamically -->
+                        </ul>
+                    </div>
+                </section>
+
+                <!-- SECTION 2: CV TEMPLATE -->
+                <section class="sidebar-section">
+                    <div class="section-title">
+                        <span class="step-num">2</span>
+                        <h3>CV Formatting Template</h3>
+                    </div>
+                    <p class="section-desc">Upload a custom DOCX template for client CV generation.</p>
+
+                    <div class="dropzone-mini" id="template-dropzone">
+                        <input type="file" id="template-input" accept=".docx" hidden>
+                        <i class="fa-solid fa-file-word template-icon"></i>
+                        <p class="drop-text">Upload template (.docx) or <span>browse</span></p>
+                    </div>
+
+                    <div class="active-template-card" id="template-status">
+                        <div class="template-info">
+                            <i class="fa-solid fa-circle-check active-icon"></i>
+                            <div>
+                                <h4 id="active-template-name">Default CV Format</h4>
+                                <span id="active-template-date">Using built-in styling</span>
+                            </div>
+                        </div>
+                        <button id="delete-template-btn" class="btn-icon" title="Reset to default template" style="display: none;">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- SECTION 3: JOB DESCRIPTION -->
+                <section class="sidebar-section">
+                    <div class="section-title">
+                        <span class="step-num">3</span>
+                        <h3>Job Description</h3>
+                    </div>
+                    <p class="section-desc">Specify the target JD to score candidates against.</p>
+
+                    <div class="jd-tabs">
+                        <button class="jd-tab active" data-tab="text">Paste JD</button>
+                        <button class="jd-tab" data-tab="upload">Upload JD File</button>
+                    </div>
+
+                    <div id="jd-text-container" class="jd-tab-content active">
+                        <textarea id="jd-textarea" placeholder="Paste the Job Description here (skills, qualifications, responsibilities)..."></textarea>
+                    </div>
+
+                    <div id="jd-upload-container" class="jd-tab-content">
+                        <div class="dropzone-mini" id="jd-dropzone">
+                            <input type="file" id="jd-input" accept=".pdf,.docx,.txt" hidden>
+                            <i class="fa-solid fa-file-invoice jd-icon"></i>
+                            <p class="drop-text">Upload JD file (.pdf, .docx, .txt) or <span>browse</span></p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </aside>
+
+        <!-- MAIN WORKSPACE -->
+        <main class="workspace">
+            <!-- HEADER -->
+            <header class="workspace-header">
+                <div class="workspace-title">
+                    <h1>Recruiter Dashboard</h1>
+                    <p>Screen resumes, compare matching candidates semantically, and generate polished client-facing CVs.</p>
+                </div>
+                <div class="quick-stats">
+                    <div class="stat-card">
+                        <span class="stat-label">Total Indexed</span>
+                        <span id="stat-total-candidates" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Selected</span>
+                        <span id="stat-selected-count" class="stat-value">0</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- ACTION BAR -->
+            <div class="action-bar">
+                <div class="action-group">
+                    <button id="rank-btn" class="btn btn-primary">
+                        <i class="fa-solid fa-ranking-star"></i> Rank Candidates
+                    </button>
+                    <button id="compare-btn" class="btn btn-secondary" disabled>
+                        <i class="fa-solid fa-users-viewfinder"></i> Compare Selected
+                    </button>
+                </div>
+                <button id="generate-cvs-btn" class="btn btn-success" disabled>
+                    <i class="fa-solid fa-file-zipper"></i> Generate Selected CVs
+                </button>
+            </div>
+
+            <!-- CONTENT CARD -->
+            <div class="card workspace-card">
+                <div class="candidates-header">
+                    <h2>Ranked Matching Results</h2>
+                    <div class="candidates-actions">
+                        <span id="matching-summary" class="summary-text">Ready to match candidates. Enter a JD above and click Rank.</span>
+                        <button id="select-all-btn" class="btn-link" style="display: none;">Select All</button>
+                    </div>
+                </div>
+
+                <!-- LOADING OVERLAY -->
+                <div id="loading-overlay" class="loading-overlay" style="display: none;">
+                    <div class="spinner"></div>
+                    <p id="loading-text">Processing...</p>
+                </div>
+
+                <!-- NO RESULTS / EMPTY STATE -->
+                <div id="empty-state" class="empty-state">
+                    <div class="empty-icon-wrapper">
+                        <i class="fa-solid fa-magnifying-glass-chart"></i>
+                    </div>
+                    <h3>No candidates matched yet</h3>
+                    <p>Upload candidate resumes in the sidebar, paste/upload a job description, and click "Rank Candidates" to begin scanning.</p>
+                </div>
+
+                <!-- CANDIDATE LIST -->
+                <div id="candidates-container" class="candidates-container" style="display: none;">
+                    <table class="candidates-table">
+                        <thead>
+                            <tr>
+                                <th width="40"><input type="checkbox" id="master-checkbox"></th>
+                                <th>Candidate</th>
+                                <th>Current Role</th>
+                                <th width="150">Experience</th>
+                                <th width="120" style="text-align: right;">Match Score</th>
+                                <th width="100" style="text-align: center;">Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="candidates-tbody">
+                            <!-- Rows added dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- CANDIDATE PROFILE MODAL -->
+    <div id="candidate-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title-wrapper">
+                    <div class="modal-avatar" id="modal-candidate-avatar">U</div>
+                    <div>
+                        <h2 id="modal-candidate-name">Candidate Name</h2>
+                        <p id="modal-candidate-role">Current Role Title</p>
+                    </div>
+                </div>
+                <button class="close-modal-btn" id="close-candidate-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="profile-details-content">
+                    <!-- Profile details rendered dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- COMPARISON MODAL -->
+    <div id="comparison-modal" class="modal modal-large">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title-wrapper">
+                    <i class="fa-solid fa-users-viewfinder modal-header-icon"></i>
+                    <div>
+                        <h2>Candidate Comparison Matrix</h2>
+                        <p>Detailed side-by-side analysis of selected candidates against the Job Description.</p>
+                    </div>
+                </div>
+                <button class="close-modal-btn" id="close-comparison-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body-comparison">
+                <div class="table-responsive">
+                    <table class="comparison-table">
+                        <thead id="comparison-thead">
+                            <!-- Headers dynamically rendered -->
+                        </thead>
+                        <tbody id="comparison-tbody">
+                            <!-- Rows dynamically rendered -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATION CONTAINER -->
+    <div class="toast-container" id="toast-container"></div>
+</body>
+</html>
