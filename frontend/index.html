@@ -115,16 +115,30 @@
                     <h1>Recruiter Dashboard</h1>
                     <p>Screen resumes, compare matching candidates semantically, and generate polished client-facing CVs.</p>
                 </div>
-                <div class="quick-stats">
-                    <div class="stat-card">
-                        <span class="stat-label">Total Indexed</span>
-                        <span id="stat-total-candidates" class="stat-value">0</span>
+                <div class="quick-stats-container">
+                    <div class="quick-stats">
+                        <div class="stat-card">
+                            <span class="stat-label">Total Indexed</span>
+                            <span id="stat-total-candidates" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">New Candidates</span>
+                            <span id="stat-new-candidates" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Updated Candidates</span>
+                            <span id="stat-updated-candidates" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Selected</span>
+                            <span id="stat-selected-count" class="stat-value">0</span>
+                        </div>
                     </div>
-                    <div class="stat-card">
-                        <span class="stat-label">Selected</span>
-                        <span id="stat-selected-count" class="stat-value">0</span>
-                    </div>
+                    <button id="reset-stats-btn" class="btn-reset-stats" title="Resets only the upload session counters.&#10;Your candidate database and embeddings remain unchanged.">
+                        <i class="fa-solid fa-arrow-rotate-left"></i> Reset Upload Statistics
+                    </button>
                 </div>
+
             </header>
 
             <!-- ACTION BAR -->
@@ -176,7 +190,7 @@
                                 <th>Candidate</th>
                                 <th>Current Role</th>
                                 <th width="150">Experience</th>
-                                <th width="120" style="text-align: right;">Match Score</th>
+                                <th width="140" style="text-align: right;">Similarity Score</th>
                                 <th width="100" style="text-align: center;">Details</th>
                             </tr>
                         </thead>
@@ -240,5 +254,6 @@
 
     <!-- TOAST NOTIFICATION CONTAINER -->
     <div class="toast-container" id="toast-container"></div>
+    <script src="app.js"></script>
 </body>
 </html>

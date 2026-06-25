@@ -394,6 +394,58 @@ def generate_selected_cvs(
     )
 
 
+def find_matched_candidate(new_cand, parsed_json_folder):
+    import re
+    
+    def normalize_name(name):
+        if not name:
+            return ""
+        name = name.lower().strip()
+        name = name.replace(".", "")
+        name = re.sub(r'\s+', ' ', name)
+        return name
+
+    def normalize_phone(phone):
+        if not phone:
+            return ""
+        return re.sub(r'\D', '', phone)
+
+    new_email = new_cand.get("email", "").strip().lower()
+    new_phone = normalize_phone(new_cand.get("phone", ""))
+    new_name_norm = normalize_name(new_cand.get("candidate_name", ""))
+
+    if not os.path.exists(parsed_json_folder):
+        return None, None
+
+    for filename in os.listdir(parsed_json_folder):
+        if not filename.endswith(".json") or filename == "upload_stats.json":
+            continue
+        file_path = os.path.join(parsed_json_folder, filename)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                exist_cand = json.load(f)
+            
+            exist_email = exist_cand.get("email", "").strip().lower()
+            exist_phone = normalize_phone(exist_cand.get("phone", ""))
+            exist_name_norm = normalize_name(exist_cand.get("candidate_name", ""))
+            
+            # 1. Email Match (highest priority)
+            if new_email and exist_email and new_email == exist_email:
+                return filename, exist_cand.get("candidate_name")
+                
+            # 2. Phone Match (only if email is missing on either)
+            if (not new_email or not exist_email) and new_phone and exist_phone and new_phone == exist_phone:
+                return filename, exist_cand.get("candidate_name")
+                
+            # 3. Normalized Name Match (only if BOTH email and phone are unavailable on BOTH)
+            if (not new_email and not new_phone) and (not exist_email and not exist_phone) and new_name_norm and exist_name_norm and new_name_norm == exist_name_norm:
+                return filename, exist_cand.get("candidate_name")
+        except Exception:
+            pass
+            
+    return None, None
+
+
 @app.post("/upload-resumes")
 async def upload_resumes(
     files: List[UploadFile] = File(...)
@@ -404,6 +456,15 @@ async def upload_resumes(
 
     uploaded_candidates = []
     failed_uploads = []
+
+    stats_path = "embeddings/upload_stats.json"
+    stats = {"new_candidates": 0, "updated_candidates": 0}
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path, "r") as f:
+                stats = json.load(f)
+        except Exception:
+            pass
 
     cache_path = "embeddings/candidate_embeddings.json"
     cache = {}
@@ -445,12 +506,46 @@ async def upload_resumes(
                 .replace(":", "_")
             )
 
-            json_file_path = os.path.join(PARSED_JSON_FOLDER, f"{safe_filename}.json")
+            # Check for duplicate candidate using robust rules
+            matched_filename, matched_candidate_name = find_matched_candidate(candidate, PARSED_JSON_FOLDER)
+            
+            if matched_filename:
+                is_update = True
+                json_file_path = os.path.join(PARSED_JSON_FOLDER, matched_filename)
+            else:
+                is_update = False
+                base_filename = safe_filename
+                counter = 0
+                while True:
+                    cand_file = f"{base_filename}.json" if counter == 0 else f"{base_filename}_{counter}.json"
+                    json_file_path = os.path.join(PARSED_JSON_FOLDER, cand_file)
+                    if not os.path.exists(json_file_path):
+                        break
+                    counter += 1
+
             with open(json_file_path, "w", encoding="utf-8") as f_out:
                 json.dump(candidate, f_out, indent=4, ensure_ascii=False)
 
+            if is_update:
+                stats["updated_candidates"] += 1
+            else:
+                stats["new_candidates"] += 1
+
             if candidate_name in cache:
                 del cache[candidate_name]
+                cache_modified = True
+
+            if matched_candidate_name and matched_candidate_name in cache:
+                del cache[matched_candidate_name]
+                cache_modified = True
+
+            if matched_filename and matched_filename in cache:
+                del cache[matched_filename]
+                cache_modified = True
+
+            new_filename = os.path.basename(json_file_path)
+            if new_filename in cache:
+                del cache[new_filename]
                 cache_modified = True
 
             uploaded_candidates.append({
@@ -493,12 +588,62 @@ async def upload_resumes(
     except Exception:
         pass
 
+    try:
+        os.makedirs(os.path.dirname(stats_path), exist_ok=True)
+        with open(stats_path, "w") as f:
+            json.dump(stats, f, indent=4)
+    except Exception:
+        pass
+
     return {
         "status": "success",
         "uploaded": uploaded_candidates,
         "failed": failed_uploads,
         "total_successful": len(uploaded_candidates),
-        "total_failed": len(failed_uploads)
+        "total_failed": len(failed_uploads),
+        "new_candidates": stats["new_candidates"],
+        "updated_candidates": stats["updated_candidates"]
+    }
+
+
+@app.get("/upload-stats")
+def get_upload_stats():
+    stats_path = "embeddings/upload_stats.json"
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"new_candidates": 0, "updated_candidates": 0}
+
+
+@app.post("/reset-upload-stats")
+def reset_upload_stats():
+    stats_path = "embeddings/upload_stats.json"
+    stats = {"new_candidates": 0, "updated_candidates": 0}
+    try:
+        os.makedirs(os.path.dirname(stats_path), exist_ok=True)
+        with open(stats_path, "w") as f:
+            json.dump(stats, f, indent=4)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reset upload stats: {str(e)}"
+        )
+
+    # Count total indexed candidates
+    total_indexed = 0
+    if os.path.exists(PARSED_JSON_FOLDER):
+        for filename in os.listdir(PARSED_JSON_FOLDER):
+            if filename.endswith(".json") and filename != "upload_stats.json":
+                total_indexed += 1
+
+    return {
+        "message": "Upload statistics reset successfully.",
+        "total_indexed": total_indexed,
+        "new_candidates": 0,
+        "updated_candidates": 0
     }
 
 

@@ -32,7 +32,10 @@ const jdDropzone = document.getElementById('jd-dropzone');
 const jdInput = document.getElementById('jd-input');
 
 const statTotalCandidates = document.getElementById('stat-total-candidates');
+const statNewCandidates = document.getElementById('stat-new-candidates');
+const statUpdatedCandidates = document.getElementById('stat-updated-candidates');
 const statSelectedCount = document.getElementById('stat-selected-count');
+const resetStatsBtn = document.getElementById('reset-stats-btn');
 
 const rankBtn = document.getElementById('rank-btn');
 const compareBtn = document.getElementById('compare-btn');
@@ -71,8 +74,9 @@ function initApp() {
     // 1. Fetch active template
     fetchActiveTemplate();
 
-    // 2. Fetch candidates list count
+    // 2. Fetch candidates list count & stats
     fetchTotalCandidatesCount();
+    fetchUploadStats();
 
     // 3. Register Drag & Drop events
     setupDragAndDrop(resumesDropzone, resumesInput, handleResumesUpload);
@@ -83,21 +87,39 @@ function initApp() {
     setupJdTabs();
     setupActions();
     setupModals();
+
+    // Remove initial disabled state to allow recruiter-friendly validation clicks
+    compareBtn.removeAttribute('disabled');
+    generateCvsBtn.removeAttribute('disabled');
 }
 
 // TOAST NOTIFICATIONS
-function showToast(message, type = 'success') {
+function showToast(title, bodyOrType = '', type = 'success') {
+    let body = '';
+    let finalType = type;
+    
+    const knownTypes = ['success', 'error', 'warning', 'info'];
+    if (knownTypes.includes(bodyOrType)) {
+        finalType = bodyOrType;
+        body = '';
+    } else {
+        body = bodyOrType;
+    }
+
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+    toast.className = `toast toast-${finalType}`;
     
     let icon = 'fa-circle-info';
-    if (type === 'success') icon = 'fa-circle-check';
-    if (type === 'error') icon = 'fa-circle-xmark';
-    if (type === 'warning') icon = 'fa-circle-exclamation';
+    if (finalType === 'success') icon = 'fa-circle-check';
+    if (finalType === 'error') icon = 'fa-circle-xmark';
+    if (finalType === 'warning') icon = 'fa-circle-exclamation';
 
     toast.innerHTML = `
         <i class="fa-solid ${icon}"></i>
-        <div>${message}</div>
+        <div class="toast-content">
+            <strong class="toast-title">${title}</strong>
+            ${body ? `<div class="toast-body">${body}</div>` : ''}
+        </div>
     `;
 
     toastContainer.appendChild(toast);
@@ -116,10 +138,48 @@ function showToast(message, type = 'success') {
 function showLoading(text = 'Processing...') {
     loadingText.innerText = text;
     loadingOverlay.style.display = 'flex';
+
+    // Disable all action buttons and inputs
+    rankBtn.disabled = true;
+    compareBtn.disabled = true;
+    generateCvsBtn.disabled = true;
+    if (deleteTemplateBtn) deleteTemplateBtn.disabled = true;
+    resumesInput.disabled = true;
+    templateInput.disabled = true;
+    jdInput.disabled = true;
+    jdTextarea.disabled = true;
+    masterCheckbox.disabled = true;
+
+    document.querySelectorAll('.cand-checkbox').forEach(cb => cb.disabled = true);
+    document.querySelectorAll('.jd-tab').forEach(tab => tab.disabled = true);
+
+    resumesDropzone.classList.add('disabled-dropzone');
+    templateDropzone.classList.add('disabled-dropzone');
+    jdDropzone.classList.add('disabled-dropzone');
 }
 
 function hideLoading() {
     loadingOverlay.style.display = 'none';
+
+    // Re-enable all action buttons and inputs
+    resumesInput.disabled = false;
+    templateInput.disabled = false;
+    jdInput.disabled = false;
+    jdTextarea.disabled = false;
+    masterCheckbox.disabled = false;
+
+    document.querySelectorAll('.cand-checkbox').forEach(cb => cb.disabled = false);
+    document.querySelectorAll('.jd-tab').forEach(tab => tab.disabled = false);
+
+    resumesDropzone.classList.remove('disabled-dropzone');
+    templateDropzone.classList.remove('disabled-dropzone');
+    jdDropzone.classList.remove('disabled-dropzone');
+
+    rankBtn.disabled = false;
+    if (deleteTemplateBtn && state.activeTemplate && state.activeTemplate.active) {
+        deleteTemplateBtn.disabled = false;
+    }
+    updateSelectionState();
 }
 
 // API: FETCH ACTIVE TEMPLATE
@@ -130,7 +190,7 @@ async function fetchActiveTemplate() {
         updateTemplateUI(data);
     } catch (error) {
         console.error('Error fetching active template:', error);
-        showToast('Failed to check active template.', 'error');
+        showToast('Active Template', 'Failed to check active template.', 'error');
     }
 }
 
@@ -144,6 +204,18 @@ async function fetchTotalCandidatesCount() {
         indexedCountLabel.innerText = `${state.totalCandidates} candidates`;
     } catch (error) {
         console.error('Error fetching candidates:', error);
+    }
+}
+
+// API: FETCH UPLOAD STATS
+async function fetchUploadStats() {
+    try {
+        const response = await fetch(`${API_BASE}/upload-stats`);
+        const data = await response.json();
+        if (statNewCandidates) statNewCandidates.innerText = data.new_candidates || 0;
+        if (statUpdatedCandidates) statUpdatedCandidates.innerText = data.updated_candidates || 0;
+    } catch (error) {
+        console.error('Error fetching upload stats:', error);
     }
 }
 
@@ -166,7 +238,11 @@ function updateTemplateUI(data) {
 // DRAG AND DROP UTILITY
 function setupDragAndDrop(dropzoneEl, inputEl, uploadCallback) {
     // Click dropzone to trigger input
-    dropzoneEl.addEventListener('click', () => inputEl.click());
+    dropzoneEl.addEventListener('click', () => {
+        if (!inputEl.disabled) {
+            inputEl.click();
+        }
+    });
 
     inputEl.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
@@ -180,7 +256,9 @@ function setupDragAndDrop(dropzoneEl, inputEl, uploadCallback) {
         dropzoneEl.addEventListener(eventName, (e) => {
             e.preventDefault();
             e.stopPropagation();
-            dropzoneEl.classList.add('dragover');
+            if (!dropzoneEl.classList.contains('disabled-dropzone')) {
+                dropzoneEl.classList.add('dragover');
+            }
         }, false);
     });
 
@@ -193,6 +271,9 @@ function setupDragAndDrop(dropzoneEl, inputEl, uploadCallback) {
     });
 
     dropzoneEl.addEventListener('drop', (e) => {
+        if (dropzoneEl.classList.contains('disabled-dropzone')) {
+            return;
+        }
         const dt = e.dataTransfer;
         const files = dt.files;
         if (files.length > 0) {
@@ -203,6 +284,7 @@ function setupDragAndDrop(dropzoneEl, inputEl, uploadCallback) {
 
 // HANDLER: RESUMES UPLOAD
 async function handleResumesUpload(files) {
+    const filesArray = Array.from(files);
     const formData = new FormData();
     let validFilesCount = 0;
     
@@ -210,8 +292,11 @@ async function handleResumesUpload(files) {
     uploadList.innerHTML = '';
     resumesStatus.style.display = 'block';
 
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+    const fileStates = {};
+    const timeouts = [];
+
+    for (let i = 0; i < filesArray.length; i++) {
+        const file = filesArray[i];
         const ext = file.name.split('.').pop().toLowerCase();
         
         const item = document.createElement('li');
@@ -219,7 +304,7 @@ async function handleResumesUpload(files) {
         item.innerHTML = `
             <span class="upload-item-name" title="${file.name}">${file.name}</span>
             <span class="upload-item-status status-parsing" id="upload-item-${i}">
-                <i class="fa-solid fa-spinner fa-spin"></i> Parsing
+                <i class="fa-solid fa-spinner fa-spin"></i> Uploading...
             </span>
         `;
         uploadList.appendChild(item);
@@ -227,15 +312,46 @@ async function handleResumesUpload(files) {
         if (ext === 'pdf' || ext === 'docx') {
             formData.append('files', file);
             validFilesCount++;
+
+            // Track states
+            fileStates[file.name] = {
+                index: i,
+                isFinished: false,
+                currentText: 'Uploading...'
+            };
+
+            // Timed transitions
+            const t1 = setTimeout(() => {
+                if (fileStates[file.name] && !fileStates[file.name].isFinished) {
+                    fileStates[file.name].currentText = 'Parsing...';
+                    const el = document.getElementById(`upload-item-${i}`);
+                    if (el) {
+                        el.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Parsing...`;
+                    }
+                }
+            }, 800 + i * 300);
+            timeouts.push(t1);
+
+            const t2 = setTimeout(() => {
+                if (fileStates[file.name] && !fileStates[file.name].isFinished) {
+                    fileStates[file.name].currentText = 'Generating Embedding...';
+                    const el = document.getElementById(`upload-item-${i}`);
+                    if (el) {
+                        el.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Generating Embedding (${i + 1}/${validFilesCount})... (~3-5s)`;
+                    }
+                }
+            }, 2200 + i * 1200);
+            timeouts.push(t2);
+
         } else {
             const statusEl = document.getElementById(`upload-item-${i}`);
             statusEl.className = 'upload-item-status status-failed';
-            statusEl.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> Format`;
+            statusEl.innerHTML = `❌ Failed`;
+            showToast('Unsupported resume type', 'Only PDF and DOCX resumes are supported.', 'error');
         }
     }
 
     if (validFilesCount === 0) {
-        showToast('No valid PDF or DOCX files selected.', 'warning');
         return;
     }
 
@@ -246,52 +362,85 @@ async function handleResumesUpload(files) {
             method: 'POST',
             body: formData
         });
+        
+        if (!response.ok) {
+            throw new Error('Upload failed');
+        }
+        
         const data = await response.json();
+
+        // Clear all pending timeouts
+        timeouts.forEach(t => clearTimeout(t));
+
+        // Mark all tracked files as finished
+        for (const name in fileStates) {
+            if (fileStates[name]) {
+                fileStates[name].isFinished = true;
+            }
+        }
 
         // Update items status based on api response
         const successfulNames = data.uploaded.map(u => u.filename);
-        const failedMap = {};
-        data.failed.forEach(f => { failedMap[f.filename] = f.error; });
+        const failedNames = data.failed.map(f => f.filename);
 
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
+        for (let i = 0; i < filesArray.length; i++) {
+            const file = filesArray[i];
             const statusEl = document.getElementById(`upload-item-${i}`);
             if (!statusEl) continue;
 
-            if (successfulNames.includes(file.name)) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            if (ext !== 'pdf' && ext !== 'docx') continue;
+
+            const isSuccess = successfulNames.includes(file.name) || !failedNames.includes(file.name);
+            if (isSuccess) {
                 statusEl.className = 'upload-item-status status-success';
-                statusEl.innerHTML = `<i class="fa-solid fa-circle-check"></i> Success`;
-            } else if (file.name in failedMap) {
+                statusEl.innerHTML = `✅ Indexed`;
+            } else {
                 statusEl.className = 'upload-item-status status-failed';
-                statusEl.innerHTML = `<i class="fa-solid fa-circle-xmark" title="${failedMap[file.name]}"></i> Failed`;
+                statusEl.innerHTML = `❌ Failed`;
+                showToast('Failed Upload', 'Resume could not be processed. Please try again.', 'error');
             }
         }
 
         fetchTotalCandidatesCount();
+        
+        if (statNewCandidates && typeof data.new_candidates !== 'undefined') {
+            statNewCandidates.innerText = data.new_candidates;
+        }
+        if (statUpdatedCandidates && typeof data.updated_candidates !== 'undefined') {
+            statUpdatedCandidates.innerText = data.updated_candidates;
+        }
 
         if (data.total_successful > 0) {
-            showToast(`Parsed & indexed ${data.total_successful} resumes successfully!`, 'success');
+            showToast('Upload Success', `Parsed & indexed ${data.total_successful} resumes successfully!`, 'success');
         }
         if (data.total_failed > 0) {
-            showToast(`Failed to parse ${data.total_failed} resumes.`, 'error');
+            showToast('Failed Upload', `Failed to parse ${data.total_failed} resumes.`, 'error');
         }
 
     } catch (error) {
         console.error('Error uploading resumes:', error);
-        showToast('Server error while uploading resumes.', 'error');
+        showToast('Failed Upload', 'Resume could not be processed. Please try again.', 'error');
         
-        // Mark all active spinners as failed
-        const activeSpinners = uploadList.querySelectorAll('.status-parsing');
-        activeSpinners.forEach(s => {
-            s.className = 'upload-item-status status-failed';
-            s.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> Error`;
-        });
+        // Clear all pending timeouts
+        timeouts.forEach(t => clearTimeout(t));
+
+        // Mark all tracked files as failed
+        for (const name in fileStates) {
+            if (fileStates[name]) {
+                fileStates[name].isFinished = true;
+                const index = fileStates[name].index;
+                const statusEl = document.getElementById(`upload-item-${index}`);
+                if (statusEl) {
+                    statusEl.className = 'upload-item-status status-failed';
+                    statusEl.innerHTML = `❌ Failed`;
+                }
+            }
+        }
     } finally {
         hideLoading();
     }
-}
-
-// HANDLER: TEMPLATE UPLOAD
+}// HANDLER: TEMPLATE UPLOAD
 async function handleTemplateUpload(files) {
     if (files.length === 0) return;
     const file = files[0];
@@ -343,6 +492,47 @@ async function handleDeleteTemplate() {
         console.error('Error deleting template:', error);
         showToast('Failed to reset template.', 'error');
     } finally {
+        hideLoading();
+    }
+}
+
+// HANDLER: RESET STATISTICS
+async function handleResetStats() {
+    const confirmed = confirm(
+        "Reset Upload Statistics?\n\nThis will reset:\n\n• New Candidates\n• Updated Candidates\n\nThis will NOT affect:\n\n• Total Indexed Candidates\n• Parsed Resume Database\n• FAISS Index\n• Embedding Cache\n• Candidate Rankings\n• Generated CVs\n• Uploaded Resume Files\n\nDo you want to continue?"
+    );
+    
+    if (!confirmed) return;
+
+    if (resetStatsBtn) resetStatsBtn.disabled = true;
+    showLoading('Resetting upload statistics...');
+    
+    try {
+        const response = await fetch(`${API_BASE}/reset-upload-stats`, {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Reset request failed');
+        }
+        
+        const data = await response.json();
+        
+        // Update DOM elements immediately
+        if (statNewCandidates) statNewCandidates.innerText = data.new_candidates || 0;
+        if (statUpdatedCandidates) statUpdatedCandidates.innerText = data.updated_candidates || 0;
+        
+        showToast(
+            'Upload statistics have been reset successfully.',
+            'Total indexed candidates remain unchanged.',
+            'success'
+        );
+        
+    } catch (error) {
+        console.error('Error resetting statistics:', error);
+        showToast('Reset Failed', 'Failed to reset upload statistics.', 'error');
+    } finally {
+        if (resetStatsBtn) resetStatsBtn.disabled = false;
         hideLoading();
     }
 }
@@ -409,9 +599,13 @@ async function handleJdUpload(files) {
 function setupActions() {
     // 1. Rank Candidates
     rankBtn.addEventListener('click', () => {
+        if (state.totalCandidates === 0) {
+            showToast('No Resumes Uploaded', 'Please upload candidate resumes in the sidebar before ranking.', 'warning');
+            return;
+        }
         state.currentJdText = jdTextarea.value.trim();
         if (!state.currentJdText) {
-            showToast('Please paste a Job Description or upload a JD file first.', 'warning');
+            showToast('No Job Description', 'Please paste or upload a Job Description before ranking candidates.', 'warning');
             return;
         }
         rankCandidates(state.currentJdText);
@@ -420,7 +614,7 @@ function setupActions() {
     // 2. Compare Candidates
     compareBtn.addEventListener('click', () => {
         if (state.selectedCandidates.size < 2) {
-            showToast('Please select at least 2 candidates to compare.', 'warning');
+            showToast('Compare Candidates', 'Please select two or more candidates before comparing.', 'warning');
             return;
         }
         compareCandidates();
@@ -429,7 +623,7 @@ function setupActions() {
     // 3. Generate Selected CVs
     generateCvsBtn.addEventListener('click', () => {
         if (state.selectedCandidates.size === 0) {
-            showToast('Please select at least 1 candidate to generate CVs.', 'warning');
+            showToast('No Candidates Selected', 'Please select one or more candidates before generating CVs.', 'warning');
             return;
         }
         generateSelectedCvs();
@@ -440,6 +634,13 @@ function setupActions() {
         e.stopPropagation();
         handleDeleteTemplate();
     });
+
+    // 6. Reset Stats
+    if (resetStatsBtn) {
+        resetStatsBtn.addEventListener('click', () => {
+            handleResetStats();
+        });
+    }
 
     // 5. Select All checkbox logic
     masterCheckbox.addEventListener('change', (e) => {
@@ -494,10 +695,10 @@ async function rankCandidates(jdText) {
 
         renderCandidatesTable();
         matchingSummary.innerText = `Matched ${data.count} candidates against the JD.`;
-        showToast(`Success! Found and ranked ${data.count} candidates.`, 'success');
+        showToast('Ranking Complete', `Found and ranked ${data.count} candidates.`, 'success');
     } catch (error) {
         console.error('Error ranking candidates:', error);
-        showToast(error.message || 'Error scoring candidates.', 'error');
+        showToast('Ranking Failed', error.message || 'Error scoring candidates.', 'error');
     } finally {
         hideLoading();
     }
@@ -509,6 +710,12 @@ function renderCandidatesTable() {
     
     if (!state.candidatesList || state.candidatesList.length === 0) {
         emptyState.style.display = 'flex';
+        const emptyTitle = emptyState.querySelector('h3');
+        const emptyDesc = emptyState.querySelector('p');
+        if (emptyTitle && emptyDesc) {
+            emptyTitle.innerText = "No candidates matched";
+            emptyDesc.innerText = "No candidates matched the job description criteria. Try adjusting the job description or uploading more resumes.";
+        }
         candidatesContainer.style.display = 'none';
         selectAllBtn.style.display = 'none';
         return;
@@ -546,7 +753,7 @@ function renderCandidatesTable() {
                 <span class="exp-badge">Calculating...</span>
             </td>
             <td style="text-align: right;">
-                <span class="score-badge ${scoreClass}">${score}% Match</span>
+                <span class="score-badge ${scoreClass}">${score}% Semantic Match</span>
             </td>
             <td style="text-align: center;">
                 <button class="action-view-btn" data-name="${name}">
@@ -555,9 +762,6 @@ function renderCandidatesTable() {
             </td>
         `;
 
-        // We fetch the candidate detail to get actual years of experience dynamically!
-        // To avoid making N API calls sequentially in JS, we can pull it asynchronously.
-        // Let's implement dynamic experience retrieval:
         fetchCandidateSummaryDetails(name, row.querySelector('.exp-badge'));
 
         // Register checkbox listener
@@ -601,18 +805,9 @@ function updateSelectionState() {
     const size = state.selectedCandidates.size;
     statSelectedCount.innerText = size;
 
-    // Toggle Rank/Compare/Generate button active states
-    if (size >= 2) {
-        compareBtn.removeAttribute('disabled');
-    } else {
-        compareBtn.setAttribute('disabled', 'true');
-    }
-
-    if (size >= 1) {
-        generateCvsBtn.removeAttribute('disabled');
-    } else {
-        generateCvsBtn.setAttribute('disabled', 'true');
-    }
+    // Do NOT disable buttons on selection state changes so clicking can trigger toast warnings
+    compareBtn.removeAttribute('disabled');
+    generateCvsBtn.removeAttribute('disabled');
 }
 
 function updateMasterCheckboxState() {
@@ -644,7 +839,7 @@ async function viewCandidateProfile(name) {
         candidateModal.classList.add('active');
     } catch (error) {
         console.error('Error loading candidate detail:', error);
-        showToast('Error loading candidate profile details.', 'error');
+        showToast('Profile Load Error', 'Error loading candidate profile details.', 'error');
     } finally {
         hideLoading();
     }
@@ -794,7 +989,7 @@ async function compareCandidates() {
 
     } catch (error) {
         console.error('Error comparing candidates:', error);
-        showToast(error.message || 'Failed to compare candidates.', 'error');
+        showToast('Comparison Failed', error.message || 'Failed to compare candidates.', 'error');
     } finally {
         hideLoading();
     }
@@ -819,9 +1014,9 @@ function renderComparisonMatrix(results) {
     });
     comparisonThead.appendChild(trHead);
 
-    // 2. Row: Match Score
+    // 2. Row: Similarity Score (Renamed from Match Score)
     const trScore = document.createElement('tr');
-    trScore.innerHTML = `<td>Match Score</td>`;
+    trScore.innerHTML = `<td>Similarity Score</td>`;
     results.forEach(res => {
         const score = Math.round(res.match_score);
         let scoreClass = 'score-poor';
@@ -829,7 +1024,7 @@ function renderComparisonMatrix(results) {
         else if (score >= 50) scoreClass = 'score-good';
         trScore.innerHTML += `
             <td>
-                <span class="score-badge ${scoreClass}">${score}% Match</span>
+                <span class="score-badge ${scoreClass}">${score}% Semantic Match</span>
             </td>
         `;
     });
@@ -919,7 +1114,7 @@ async function generateSelectedCvs() {
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
 
-        showToast('Successfully generated and downloaded ZIP with selected CVs!', 'success');
+        showToast('CV Generation', 'Successfully generated and downloaded ZIP with selected CVs!', 'success');
         
         // Reset selection after download
         state.selectedCandidates.clear();
@@ -930,7 +1125,7 @@ async function generateSelectedCvs() {
 
     } catch (error) {
         console.error('Error generating selected CVs:', error);
-        showToast(error.message || 'Failed to generate CVs.', 'error');
+        showToast('Generation Failed', error.message || 'Failed to generate CVs.', 'error');
     } finally {
         hideLoading();
     }

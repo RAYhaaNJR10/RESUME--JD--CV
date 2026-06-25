@@ -108,7 +108,7 @@ def rebuild_index_from_parsed_json(parsed_json_folder="parsed_json"):
     if os.path.exists(parsed_json_folder):
         from services.embedding_service import create_embedding
         for filename in os.listdir(parsed_json_folder):
-            if not filename.endswith(".json"):
+            if not filename.endswith(".json") or filename == "upload_stats.json":
                 continue
             file_path = os.path.join(parsed_json_folder, filename)
             try:
@@ -116,14 +116,21 @@ def rebuild_index_from_parsed_json(parsed_json_folder="parsed_json"):
                     candidate = json.load(f)
 
                 candidate_name = candidate.get("candidate_name", "Unknown_Candidate")
-                embedding = cache.get(candidate_name)
+                
+                # Use filename as the cache key to prevent collision for candidates with identical names
+                cache_key = filename
+                embedding = cache.get(cache_key)
 
                 if not embedding:
-                    search_profile = candidate.get("search_profile", "")
-                    if not search_profile:
-                        search_profile = candidate_name
-                    embedding = create_embedding(search_profile)
-                    cache[candidate_name] = embedding
+                    # Fallback to candidate_name for backward compatibility
+                    embedding = cache.get(candidate_name)
+                    if not embedding:
+                        search_profile = candidate.get("search_profile", "")
+                        if not search_profile:
+                            search_profile = candidate_name
+                        embedding = create_embedding(search_profile)
+                        cache[candidate_name] = embedding
+                    cache[cache_key] = embedding
                     cache_modified = True
 
                 vector = normalize(embedding)
