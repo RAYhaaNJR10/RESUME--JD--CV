@@ -8,7 +8,8 @@ def generate_docx(
     output_path,
     template_path=None
 ):
-
+    if not template_path:
+        template_path = "uploads/templates/active_template.docx"
     if template_path and os.path.exists(template_path):
         document = Document(template_path)
     else:

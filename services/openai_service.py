@@ -91,8 +91,9 @@ Resume:
 {resume_text}
 """
 
+    model_name = os.getenv("OPENAI_MODEL", "gpt-5.5")
     response = client.chat.completions.create(
-        model="gpt-5.5",
+        model=model_name,
         messages=[
             {
                 "role": "user",

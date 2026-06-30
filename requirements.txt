@@ -5,3 +5,5 @@ python-dotenv
 openai
 pypdf
 python-docx
+sqlalchemy
+pymysql

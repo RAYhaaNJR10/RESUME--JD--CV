@@ -1,0 +1,54 @@
+--- Timing Run ---
+Load Candidate JSON ............ 0.00s
+Generate AI CV (OpenAI) ........ 19.51s
+Generate DOCX .................. 0.08s
+Create ZIP ..................... 0.02s
+Return Response ................ 0.00s
+
+Total .......................... 19.61s
+
+--- Timing Run ---
+Load Candidate JSON ............ 0.02s
+Generate AI CV (OpenAI) ........ 28.65s
+Generate DOCX .................. 0.18s
+Create ZIP ..................... 0.04s
+Return Response ................ 0.00s
+
+Total .......................... 28.89s
+
+--- Timing Run ---
+Load Candidate JSON ............ 0.02s
+Generate AI CV (OpenAI) ........ 36.49s
+Generate DOCX .................. 0.63s
+Create ZIP ..................... 0.01s
+Return Response ................ 0.00s
+
+Total .......................... 37.15s
+
+--- Timing Run ---
+Load Candidate JSON ............ 0.00s
+Generate AI CV (OpenAI) ........ 19.91s
+Generate DOCX .................. 0.23s
+Create ZIP ..................... 0.00s
+Return Response ................ 0.00s
+
+Total .......................... 20.16s
+
+--- Timing Run ---
+Load Candidate JSON ............ 0.01s
+Generate AI CV (OpenAI) ........ 0.04s
+Generate DOCX .................. 0.22s
+Create ZIP ..................... 0.00s
+Return Response ................ 0.00s
+
+Total .......................... 0.28s
+
+--- Timing Run ---
+Load Candidate JSON ............ 0.01s
+Generate AI CV (OpenAI) ........ 26.31s
+Generate DOCX .................. 0.16s
+Create ZIP ..................... 0.00s
+Return Response ................ 0.00s
+
+Total .......................... 26.48s
+

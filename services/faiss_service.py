@@ -156,6 +156,7 @@ def rebuild_index_from_parsed_json(parsed_json_folder="parsed_json"):
         except Exception as e:
             print(f"Error saving cache: {e}")
 
+
 def search_candidates(query_embedding, top_k=10):
 
     index = load_index()
@@ -186,3 +187,49 @@ def search_candidates(query_embedding, top_k=10):
         results.append(candidate)
 
     return results
+
+
+def rebuild_index_from_json(parsed_json_dir="parsed_json"):
+    from services.embedding_service import create_embedding
+
+    index = create_index()
+    mapping = []
+
+    if not os.path.exists(parsed_json_dir):
+        save_index(index)
+        save_mapping(mapping)
+        return
+
+    for filename in os.listdir(parsed_json_dir):
+        if not filename.endswith(".json"):
+            continue
+
+        file_path = os.path.join(parsed_json_dir, filename)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                candidate = json.load(f)
+
+            if "embedding" not in candidate:
+                search_profile = candidate.get("search_profile", "")
+                if search_profile:
+                    embedding = create_embedding(search_profile)
+                    candidate["embedding"] = embedding
+                    with open(file_path, "w", encoding="utf-8") as fw:
+                        json.dump(candidate, fw, indent=4, ensure_ascii=False)
+                else:
+                    continue
+
+            embedding = candidate["embedding"]
+            vector = normalize(embedding)
+            index.add(vector)
+
+            mapping.append({
+                "candidate_name": candidate.get("candidate_name", "Unknown_Candidate"),
+                "resume_filename": candidate.get("resume_filename", filename.replace(".json", ".pdf")),
+                "current_role": candidate.get("current_role", "")
+            })
+        except Exception as e:
+            print(f"Error indexing {filename}: {e}")
+
+    save_index(index)
+    save_mapping(mapping)
