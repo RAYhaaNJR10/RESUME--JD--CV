@@ -4,25 +4,17 @@ from services.cv_generator import (
 )
 
 candidate = parse_resume(
-    "uploads/resumes/Kollu Pavani_Autosys.docx"
+    "uploads/resumes/Aditya_Nair.docx"
 )
 
 jd = """
-Production Support Engineer
+Python Developer
 
-Autosys
-Control-M
-CAWA
-TWS
-Unix
-Linux
-Shell Scripting
-
-Incident Management
-Problem Management
-Batch Monitoring
-Production Support
-ITIL
+Required Skills:
+- Python
+- MySQL
+- Git
+- Good communication and teamwork
 """
 
 result = generate_client_cv_json(
@@ -30,4 +22,4 @@ result = generate_client_cv_json(
     jd
 )
 
-print(result)
+print(result)

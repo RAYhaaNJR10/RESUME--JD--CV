@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from typing import List
 from concurrent.futures import ThreadPoolExecutor
@@ -9,6 +9,7 @@ import json
 import os
 import zipfile
 import hashlib
+from datetime import datetime
 
 from services.matcher import match_candidates
 from services.cv_generator import generate_client_cv_json
@@ -16,6 +17,7 @@ from services.docx_generator import generate_docx
 from services.comparison_service import compare_candidates
 from services.jd_extractor import extract_jd_text
 from services.faiss_service import rebuild_index_from_parsed_json
+from services.auth_service import hash_password, verify_password, create_access_token, decode_access_token
 
 
 app = FastAPI(
@@ -32,10 +34,26 @@ app.add_middleware(
 )
 
 frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+
+# Protect /dashboard endpoint specifically, before mounting StaticFiles
+@app.get("/dashboard")
+@app.get("/dashboard/")
+def get_dashboard(request: Request):
+    try:
+        get_current_recruiter(request)
+        if not request.url.path.endswith("/"):
+            return RedirectResponse(url="/dashboard/")
+        return FileResponse(os.path.join(frontend_dir, "index.html"))
+    except HTTPException:
+        return RedirectResponse(url="/login")
+
+# Serve the static files fallback
 app.mount("/dashboard", StaticFiles(directory=frontend_dir, html=True), name="dashboard")
 
 try:
-    from db import Base, engine, SessionLocal, CandidateModel, db_session_lock, get_next_employee_id, extract_email, extract_phone, save_generated_cv_to_db, normalize_candidate_name
+    from db import Base, engine, SessionLocal, CandidateModel, RecruiterModel, DocumentModel, JobDescriptionModel, ApplicationModel, db_session_lock, get_next_employee_id, extract_email, extract_phone, save_generated_cv_to_db, normalize_candidate_name, run_db_migration
+    # Run automatic DB schema and file structure migration
+    run_db_migration(engine)
     Base.metadata.create_all(bind=engine)
     print("Database tables initialized successfully.")
 except Exception as e:
@@ -45,6 +63,158 @@ except Exception as e:
 PARSED_JSON_FOLDER = "parsed_json"
 GENERATED_CVS_FOLDER = "generated_cvs"
 JD_UPLOAD_FOLDER = "uploads/jds"
+
+
+# Helper for current recruiter extraction
+def get_current_recruiter(request: Request):
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+        
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token or session expired")
+        
+    username = payload.get("sub")
+    db = SessionLocal()
+    try:
+        recruiter = db.query(RecruiterModel).filter(RecruiterModel.username == username).first()
+        if not recruiter:
+            raise HTTPException(status_code=401, detail="User not found")
+        return recruiter
+    finally:
+        db.close()
+
+
+# Ensure default admin recruiter
+def ensure_default_admin():
+    db = SessionLocal()
+    try:
+        count = db.query(RecruiterModel).count()
+        if count == 0:
+            pw_hash = hash_password("admin123")
+            admin_user = RecruiterModel(
+                username="admin",
+                email="admin@example.com",
+                password_hash=pw_hash,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(admin_user)
+            db.commit()
+            print("\n" + "="*80)
+            print("WARNING: Default administrator account created!")
+            print("Username: admin")
+            print("Password: admin123")
+            print("IMPORTANT: Please change this default password as soon as possible!")
+            print("="*80 + "\n")
+    except Exception as e:
+        print(f"Failed to check/create default admin recruiter: {e}")
+    finally:
+        db.close()
+
+
+ensure_default_admin()
+
+
+@app.get("/login")
+def get_login():
+    return FileResponse(os.path.join(frontend_dir, "login.html"))
+
+
+@app.post("/register")
+def register_recruiter(payload: dict):
+    username = payload.get("username")
+    email = payload.get("email")
+    password = payload.get("password")
+    
+    if not username or not email or not password:
+        raise HTTPException(status_code=400, detail="Username, email, and password are required")
+        
+    db = SessionLocal()
+    try:
+        existing = db.query(RecruiterModel).filter(
+            (RecruiterModel.username == username) | (RecruiterModel.email == email)
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Username or email already registered")
+            
+        pw_hash = hash_password(password)
+        new_recruiter = RecruiterModel(
+            username=username,
+            email=email,
+            password_hash=pw_hash,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(new_recruiter)
+        db.commit()
+        return {"success": True, "message": "Recruiter registered successfully"}
+    finally:
+        db.close()
+
+
+@app.post("/login")
+def login_recruiter(payload: dict, response: Response):
+    username = payload.get("username")
+    password = payload.get("password")
+    
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+        
+    db = SessionLocal()
+    try:
+        recruiter = db.query(RecruiterModel).filter(RecruiterModel.username == username).first()
+        if not recruiter or not verify_password(password, recruiter.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+            
+        recruiter.last_login = datetime.utcnow()
+        db.commit()
+        
+        # Create token
+        token = create_access_token(data={"sub": username})
+        
+        # Set token in HTTP-only cookie
+        response.set_cookie(
+            key="access_token",
+            value=token,
+            httponly=True,
+            max_age=7200, # 2 hours
+            samesite="lax",
+            secure=False
+        )
+        
+        return {
+            "success": True,
+            "access_token": token,
+            "token_type": "bearer",
+            "username": username
+        }
+    finally:
+        db.close()
+
+
+@app.post("/logout")
+def logout_recruiter(response: Response):
+    response.delete_cookie(key="access_token")
+    return {"success": True, "message": "Logged out successfully"}
+
+
+@app.get("/current-user")
+def get_current_user(recruiter: RecruiterModel = Depends(get_current_recruiter)):
+    return {
+        "recruiter_id": recruiter.recruiter_id,
+        "username": recruiter.username,
+        "email": recruiter.email,
+        "created_at": recruiter.created_at.isoformat() + "Z" if recruiter.created_at else None,
+        "last_login": recruiter.last_login.isoformat() + "Z" if recruiter.last_login else None
+    }
+
 
 
 @app.get("/")
@@ -57,7 +227,8 @@ def home():
 
 @app.post("/rank-candidates")
 def rank_candidates(
-    payload: dict
+    payload: dict,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
 
     jd_text = payload.get(
@@ -74,7 +245,8 @@ def rank_candidates(
 
     results = match_candidates(
         jd_text,
-        top_k=100
+        top_k=100,
+        recruiter_id=recruiter.recruiter_id
     )
 
     return {
@@ -84,24 +256,27 @@ def rank_candidates(
 
 
 @app.get("/candidates")
-def get_all_candidates():
+def get_all_candidates(
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
 
     candidates = []
+    rec_parsed_dir = os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id))
 
     if not os.path.exists(
-        PARSED_JSON_FOLDER
+        rec_parsed_dir
     ):
         return []
 
     for filename in os.listdir(
-        PARSED_JSON_FOLDER
+        rec_parsed_dir
     ):
 
         if not filename.endswith(".json") or filename == "upload_stats.json":
             continue
 
         file_path = os.path.join(
-            PARSED_JSON_FOLDER,
+            rec_parsed_dir,
             filename
         )
 
@@ -147,31 +322,34 @@ def get_all_candidates():
 
 
 @app.delete("/candidates")
-def clear_all_candidates():
+def clear_all_candidates(
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
     from services.faiss_service import rebuild_index_from_json
 
-    # 1. Clear database candidates table
+    # 1. Clear database candidates table for this recruiter only
     db = SessionLocal()
     try:
         with db_session_lock:
-            db.query(CandidateModel).delete()
+            db.query(CandidateModel).filter(CandidateModel.recruiter_id == recruiter.recruiter_id).delete()
             db.commit()
     except Exception as dbe:
         print(f"Error clearing database candidates: {dbe}")
     finally:
         db.close()
 
-    # 2. Clear parsed JSON folder
-    if os.path.exists(PARSED_JSON_FOLDER):
-        for filename in os.listdir(PARSED_JSON_FOLDER):
+    # 2. Clear parsed JSON folder for this recruiter only
+    rec_parsed_dir = os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id))
+    if os.path.exists(rec_parsed_dir):
+        for filename in os.listdir(rec_parsed_dir):
             if filename.endswith(".json"):
                 try:
-                    os.remove(os.path.join(PARSED_JSON_FOLDER, filename))
+                    os.remove(os.path.join(rec_parsed_dir, filename))
                 except Exception:
                     pass
 
-    # 3. Clear uploads/resumes files (keeping cache folder)
-    resumes_folder = "uploads/resumes"
+    # 3. Clear uploads/resumes files for this recruiter only
+    resumes_folder = os.path.join("uploads/resumes", str(recruiter.recruiter_id))
     if os.path.exists(resumes_folder):
         for filename in os.listdir(resumes_folder):
             filepath = os.path.join(resumes_folder, filename)
@@ -181,9 +359,9 @@ def clear_all_candidates():
                 except Exception:
                     pass
 
-    # 4. Rebuild FAISS index (it will be empty)
+    # 4. Rebuild FAISS index (it will be empty for this recruiter)
     try:
-        rebuild_index_from_json()
+        rebuild_index_from_json(recruiter_id=recruiter.recruiter_id)
     except Exception as fe:
         print(f"Error rebuilding FAISS index: {fe}")
 
@@ -193,13 +371,61 @@ def clear_all_candidates():
     }
 
 
+@app.delete("/candidate/{candidate_name}")
+def delete_single_candidate(
+    candidate_name: str,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    from services.faiss_service import rebuild_index_from_json
+    
+    db = SessionLocal()
+    try:
+        with db_session_lock:
+            # Query candidate belonging to this recruiter
+            cand = db.query(CandidateModel).filter(
+                CandidateModel.candidate_name == candidate_name,
+                CandidateModel.recruiter_id == recruiter.recruiter_id
+            ).first()
+            if not cand:
+                raise HTTPException(status_code=404, detail="Candidate not found")
+            
+            db.delete(cand)
+            db.commit()
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+        
+    # Delete parsed json on disk for this recruiter
+    rec_parsed_dir = os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id))
+    json_path = os.path.join(rec_parsed_dir, f"{candidate_name}.json")
+    if os.path.exists(json_path):
+        try:
+            os.remove(json_path)
+        except Exception:
+            pass
+            
+    # Rebuild FAISS index
+    try:
+        rebuild_index_from_json(recruiter_id=recruiter.recruiter_id)
+    except Exception as fe:
+        print(f"Error rebuilding FAISS index: {fe}")
+        
+    return {"success": True, "message": f"Candidate {candidate_name} successfully deleted."}
+
+
 @app.get("/candidate/{candidate_name}")
 def get_candidate_details(
-    candidate_name: str
+    candidate_name: str,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
 
     file_path = os.path.join(
         PARSED_JSON_FOLDER,
+        str(recruiter.recruiter_id),
         f"{candidate_name}.json"
     )
 
@@ -217,10 +443,7 @@ def get_candidate_details(
         "r",
         encoding="utf-8"
     ) as f:
-
-        candidate = json.load(f)
-
-    return candidate
+        return json.load(f)
 
 
 @app.post(
@@ -228,7 +451,8 @@ def get_candidate_details(
     response_class=PlainTextResponse
 )
 async def upload_jd(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
 
     if not file.filename:
@@ -295,7 +519,8 @@ async def upload_jd(
 
 @app.post("/compare-candidates")
 def compare_selected_candidates(
-    payload: dict
+    payload: dict,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
 
     candidate_names = payload.get(
@@ -325,7 +550,7 @@ def compare_selected_candidates(
     comparison = compare_candidates(
         candidate_names,
         jd_text,
-        PARSED_JSON_FOLDER
+        os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id))
     )
 
     if not comparison["results"]:
@@ -340,7 +565,8 @@ def compare_selected_candidates(
 
 @app.post("/generate-selected-cvs")
 def generate_selected_cvs(
-    payload: dict
+    payload: dict,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
     import time
     t_start = time.time()
@@ -378,6 +604,7 @@ def generate_selected_cvs(
     for candidate_name in candidate_names:
         json_path = os.path.join(
             PARSED_JSON_FOLDER,
+            str(recruiter.recruiter_id),
             f"{candidate_name}.json"
         )
         if os.path.exists(json_path):
@@ -439,9 +666,11 @@ def generate_selected_cvs(
             GENERATED_CVS_FOLDER,
             f"{name}.docx"
         )
-        generate_docx(cv_json, docx_path)
+        rec_template_dir = os.path.join("uploads/templates", str(recruiter.recruiter_id))
+        template_path = os.path.join(rec_template_dir, "active_template.docx")
+        generate_docx(cv_json, docx_path, template_path=template_path)
         try:
-            save_generated_cv_to_db(name, docx_path, jd_text)
+            save_generated_cv_to_db(name, docx_path, jd_text, recruiter.recruiter_id)
         except Exception as e:
             print(f"Error saving generated CV to DB: {e}")
         return docx_path
@@ -590,7 +819,8 @@ def process_single_resume_worker(filename: str, temp_path: str, content: bytes, 
 
 @app.post("/upload-resumes")
 async def upload_resumes(
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
     import time
     import shutil
@@ -607,11 +837,15 @@ async def upload_resumes(
     uploaded_candidates = []
     failed_files = []
 
-    os.makedirs("uploads/resumes", exist_ok=True)
-    os.makedirs("parsed_json", exist_ok=True)
+    rec_id_str = str(recruiter.recruiter_id)
+    rec_resumes_dir = os.path.join("uploads/resumes", rec_id_str)
+    rec_parsed_dir = os.path.join("parsed_json", rec_id_str)
+    os.makedirs(rec_resumes_dir, exist_ok=True)
+    os.makedirs(rec_parsed_dir, exist_ok=True)
 
-    # Load statistics configuration from origin/main
-    stats_path = "embeddings/upload_stats.json"
+    # Load statistics configuration per recruiter
+    stats_path = f"embeddings/{rec_id_str}/upload_stats.json"
+    os.makedirs(os.path.dirname(stats_path), exist_ok=True)
     stats = {"new_candidates": 0, "updated_candidates": 0}
     if os.path.exists(stats_path):
         try:
@@ -637,7 +871,7 @@ async def upload_resumes(
 
         t_save_start = time.time()
         import uuid
-        temp_path = os.path.join("uploads/resumes", f"temp_{uuid.uuid4().hex}_{filename}")
+        temp_path = os.path.join(rec_resumes_dir, f"temp_{uuid.uuid4().hex}_{filename}")
         try:
             content = await file.read()
             with open(temp_path, "wb") as f:
@@ -717,7 +951,7 @@ async def upload_resumes(
                 raise ValueError("Search profile could not be generated from the resume.")
 
             # Overwrite permanent files
-            permanent_resume_path = os.path.join("uploads/resumes", filename)
+            permanent_resume_path = os.path.join(rec_resumes_dir, filename)
             if os.path.exists(permanent_resume_path):
                 os.remove(permanent_resume_path)
             shutil.move(temp_path, permanent_resume_path)
@@ -736,22 +970,26 @@ async def upload_resumes(
                     with db_session_lock:
                         db_candidate = None
                         
-                        # 1. Search by email (if non-empty)
+                        # 1. Search by email (if non-empty) under this recruiter
                         if email:
                             db_candidate = db.query(CandidateModel).filter(
-                                CandidateModel.email == email
+                                CandidateModel.email == email,
+                                CandidateModel.recruiter_id == recruiter.recruiter_id
                             ).first()
                             
-                        # 2. Search by phone (if no email match and phone is non-empty)
+                        # 2. Search by phone under this recruiter
                         if not db_candidate and phone:
                             db_candidate = db.query(CandidateModel).filter(
-                                CandidateModel.phone == phone
+                                CandidateModel.phone == phone,
+                                CandidateModel.recruiter_id == recruiter.recruiter_id
                             ).first()
                             
-                        # 3. Search by normalized name
+                        # 3. Search by normalized name under this recruiter
                         if not db_candidate and candidate_name:
                             target_norm = normalize_candidate_name(candidate_name)
-                            all_candidates = db.query(CandidateModel).all()
+                            all_candidates = db.query(CandidateModel).filter(
+                                CandidateModel.recruiter_id == recruiter.recruiter_id
+                            ).all()
                             for cand in all_candidates:
                                 if normalize_candidate_name(cand.candidate_name) == target_norm:
                                     db_candidate = cand
@@ -769,14 +1007,22 @@ async def upload_resumes(
                                 .replace("\\", "_")
                                 .replace(":", "_")
                             )
-                            old_json_path = os.path.join("parsed_json", f"{old_safe_name}.json")
+                            old_json_path = os.path.join(rec_parsed_dir, f"{old_safe_name}.json")
                             
                             db_candidate.candidate_name = candidate_name
                             db_candidate.email = email
                             db_candidate.phone = phone
-                            db_candidate.original_resume = content
-                            db_candidate.original_resume_filename = filename
-                            db_candidate.uploaded_at = datetime.utcnow()
+                            
+                            # Update DocumentModel blobs
+                            doc = db.query(DocumentModel).filter(DocumentModel.candidate_id == db_candidate.candidate_id).first()
+                            if not doc:
+                                doc = DocumentModel(candidate_id=db_candidate.candidate_id)
+                                db.add(doc)
+                            doc.original_resume_blob = content
+                            doc.original_resume_filename = filename
+                            doc.updated_at = datetime.utcnow()
+                            db_candidate.updated_at = datetime.utcnow()
+                            
                             db.commit()
                             
                             new_safe_name = (
@@ -785,7 +1031,7 @@ async def upload_resumes(
                                 .replace("\\", "_")
                                 .replace(":", "_")
                             )
-                            new_json_path = os.path.join("parsed_json", f"{new_safe_name}.json")
+                            new_json_path = os.path.join(rec_parsed_dir, f"{new_safe_name}.json")
                             
                             if old_json_path != new_json_path and os.path.exists(old_json_path):
                                 try:
@@ -796,19 +1042,31 @@ async def upload_resumes(
                             with open(new_json_path, "w", encoding="utf-8") as jf:
                                 json.dump(candidate, jf, indent=4, ensure_ascii=False)
                         else:
-                            # New candidate! Generate new employee_id
+                            # New candidate! Generate new employee_id under this recruiter
                             stats["new_candidates"] += 1
                             emp_id = get_next_employee_id(db)
                             new_candidate = CandidateModel(
+                                recruiter_id=recruiter.recruiter_id,
                                 employee_id=emp_id,
                                 candidate_name=candidate_name,
                                 email=email,
                                 phone=phone,
-                                original_resume=content,
-                                original_resume_filename=filename,
-                                uploaded_at=datetime.utcnow()
+                                created_at=datetime.utcnow(),
+                                updated_at=datetime.utcnow()
                             )
                             db.add(new_candidate)
+                            db.commit()
+                            db.refresh(new_candidate)
+                            
+                            # Add DocumentModel blob record
+                            new_doc = DocumentModel(
+                                candidate_id=new_candidate.candidate_id,
+                                original_resume_blob=content,
+                                original_resume_filename=filename,
+                                created_at=datetime.utcnow(),
+                                updated_at=datetime.utcnow()
+                            )
+                            db.add(new_doc)
                             db.commit()
                             
                             new_safe_name = (
@@ -817,7 +1075,7 @@ async def upload_resumes(
                                 .replace("\\", "_")
                                 .replace(":", "_")
                             )
-                            new_json_path = os.path.join("parsed_json", f"{new_safe_name}.json")
+                            new_json_path = os.path.join(rec_parsed_dir, f"{new_safe_name}.json")
                             with open(new_json_path, "w", encoding="utf-8") as jf:
                                 json.dump(candidate, jf, indent=4, ensure_ascii=False)
                                 
@@ -825,7 +1083,7 @@ async def upload_resumes(
                 finally:
                     db.close()
             except Exception as dbe:
-                # If database error occurs, fallback to default parsed_json workflow to guarantee core pipeline runs
+                # If database error occurs, fallback to default parsed_json workflow
                 dup_time = time.time() - t_dup_start
                 t_db_start = time.time()
                 print(f"Database error, using filesystem fallback: {dbe}")
@@ -835,7 +1093,7 @@ async def upload_resumes(
                     .replace("\\", "_")
                     .replace(":", "_")
                 )
-                new_json_path = os.path.join("parsed_json", f"{new_safe_name}.json")
+                new_json_path = os.path.join(rec_parsed_dir, f"{new_safe_name}.json")
                 with open(new_json_path, "w", encoding="utf-8") as jf:
                     json.dump(candidate, jf, indent=4, ensure_ascii=False)
                 db_time = time.time() - t_db_start
@@ -850,7 +1108,7 @@ async def upload_resumes(
                 .replace("\\", "_")
                 .replace(":", "_")
             )
-            new_json_path = os.path.join("parsed_json", f"{new_safe_name}.json")
+            new_json_path = os.path.join(rec_parsed_dir, f"{new_safe_name}.json")
             with open(new_json_path, "w", encoding="utf-8") as jf:
                 json.dump(candidate, jf, indent=4, ensure_ascii=False)
                 
@@ -896,7 +1154,7 @@ async def upload_resumes(
     # 4. Batch FAISS indexing
     if uploaded_candidates:
         t_faiss_start = time.time()
-        rebuild_index_from_json()
+        rebuild_index_from_json(recruiter_id=recruiter.recruiter_id)
         faiss_time = time.time() - t_faiss_start
         print(f"FAISS indexing time (batch) ... {faiss_time:.2f}s\n")
         
@@ -942,8 +1200,10 @@ async def upload_resumes(
 
 
 @app.get("/upload-stats")
-def get_upload_stats():
-    stats_path = "embeddings/upload_stats.json"
+def get_upload_stats(
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    stats_path = f"embeddings/{recruiter.recruiter_id}/upload_stats.json"
     if os.path.exists(stats_path):
         try:
             with open(stats_path, "r") as f:
@@ -954,8 +1214,10 @@ def get_upload_stats():
 
 
 @app.post("/reset-upload-stats")
-def reset_upload_stats():
-    stats_path = "embeddings/upload_stats.json"
+def reset_upload_stats(
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    stats_path = f"embeddings/{recruiter.recruiter_id}/upload_stats.json"
     stats = {"new_candidates": 0, "updated_candidates": 0}
     try:
         os.makedirs(os.path.dirname(stats_path), exist_ok=True)
@@ -969,8 +1231,9 @@ def reset_upload_stats():
 
     # Count total indexed candidates
     total_indexed = 0
-    if os.path.exists(PARSED_JSON_FOLDER):
-        for filename in os.listdir(PARSED_JSON_FOLDER):
+    rec_parsed_dir = os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id))
+    if os.path.exists(rec_parsed_dir):
+        for filename in os.listdir(rec_parsed_dir):
             if filename.endswith(".json") and filename != "upload_stats.json":
                 total_indexed += 1
 
@@ -984,7 +1247,8 @@ def reset_upload_stats():
 
 @app.post("/upload-template")
 async def upload_template(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
@@ -993,9 +1257,10 @@ async def upload_template(
     if ext != ".docx":
         raise HTTPException(status_code=400, detail="Only DOCX template files are supported.")
 
-    os.makedirs("uploads/templates", exist_ok=True)
-    template_path = "uploads/templates/active_template.docx"
-    meta_path = "uploads/templates/active_template.json"
+    rec_template_dir = os.path.join("uploads/templates", str(recruiter.recruiter_id))
+    os.makedirs(rec_template_dir, exist_ok=True)
+    template_path = os.path.join(rec_template_dir, "active_template.docx")
+    meta_path = os.path.join(rec_template_dir, "active_template.json")
 
     try:
         content = await file.read()
@@ -1014,9 +1279,12 @@ async def upload_template(
 
 
 @app.get("/active-template")
-def get_active_template():
-    template_path = "uploads/templates/active_template.docx"
-    meta_path = "uploads/templates/active_template.json"
+def get_active_template(
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    rec_template_dir = os.path.join("uploads/templates", str(recruiter.recruiter_id))
+    template_path = os.path.join(rec_template_dir, "active_template.docx")
+    meta_path = os.path.join(rec_template_dir, "active_template.json")
 
     if os.path.exists(template_path):
         original_filename = "active_template.docx"
@@ -1039,9 +1307,12 @@ def get_active_template():
 
 
 @app.delete("/active-template")
-def delete_active_template():
-    template_path = "uploads/templates/active_template.docx"
-    meta_path = "uploads/templates/active_template.json"
+def delete_active_template(
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    rec_template_dir = os.path.join("uploads/templates", str(recruiter.recruiter_id))
+    template_path = os.path.join(rec_template_dir, "active_template.docx")
+    meta_path = os.path.join(rec_template_dir, "active_template.json")
 
     deleted = False
     if os.path.exists(template_path):

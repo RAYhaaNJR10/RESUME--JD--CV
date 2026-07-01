@@ -4,7 +4,8 @@ from services.faiss_service import search_candidates
 
 def match_candidates(
     jd_text,
-    top_k=100
+    top_k=100,
+    recruiter_id=None
 ):
 
     jd_embedding = create_embedding(
@@ -13,7 +14,8 @@ def match_candidates(
 
     results = search_candidates(
         jd_embedding,
-        top_k
+        top_k,
+        recruiter_id
     )
 
     return results

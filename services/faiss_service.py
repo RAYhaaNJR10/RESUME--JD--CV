@@ -3,102 +3,90 @@ import numpy as np
 import json
 import os
 
-
-INDEX_PATH = "embeddings/resume_index.faiss"
-MAPPING_PATH = "embeddings/resume_mapping.json"
-CACHE_PATH = "embeddings/candidate_embeddings.json"
-
+def get_paths(recruiter_id):
+    if recruiter_id is not None:
+        base_dir = f"embeddings/{recruiter_id}"
+    else:
+        base_dir = "embeddings"
+    os.makedirs(base_dir, exist_ok=True)
+    return {
+        "index": os.path.join(base_dir, "resume_index.faiss"),
+        "mapping": os.path.join(base_dir, "resume_mapping.json"),
+        "cache": os.path.join(base_dir, "candidate_embeddings.json")
+    }
 
 def create_index(dimension=1536):
     return faiss.IndexFlatIP(dimension)
 
-
 def normalize(vector):
     vector = np.array(vector, dtype=np.float32)
     vector = vector.reshape(1, -1)
-
     faiss.normalize_L2(vector)
-
     return vector
 
+def save_index(index, recruiter_id=None):
+    paths = get_paths(recruiter_id)
+    faiss.write_index(index, paths["index"])
 
-def save_index(index):
-    faiss.write_index(index, INDEX_PATH)
-
-
-def load_index():
-
-    if not os.path.exists(INDEX_PATH):
+def load_index(recruiter_id=None):
+    paths = get_paths(recruiter_id)
+    if not os.path.exists(paths["index"]):
         return create_index()
+    return faiss.read_index(paths["index"])
 
-    return faiss.read_index(INDEX_PATH)
-
-
-def save_mapping(mapping):
-
-    with open(MAPPING_PATH, "w") as f:
+def save_mapping(mapping, recruiter_id=None):
+    paths = get_paths(recruiter_id)
+    with open(paths["mapping"], "w") as f:
         json.dump(mapping, f, indent=4)
 
-
-def load_mapping():
-
-    if not os.path.exists(MAPPING_PATH):
+def load_mapping(recruiter_id=None):
+    paths = get_paths(recruiter_id)
+    if not os.path.exists(paths["mapping"]):
         return []
-
-    with open(MAPPING_PATH, "r") as f:
+    with open(paths["mapping"], "r") as f:
         return json.load(f)
 
-
-def add_candidate(candidate_data, embedding):
-
-    index = load_index()
-
-    mapping = load_mapping()
-
+def add_candidate(candidate_data, embedding, recruiter_id=None):
+    index = load_index(recruiter_id)
+    mapping = load_mapping(recruiter_id)
     vector = normalize(embedding)
-
     index.add(vector)
 
     candidate_name = candidate_data.get("candidate_name", "Unknown_Candidate")
+    mapping.append({
+        "candidate_name": candidate_name,
+        "resume_filename": candidate_data.get("resume_filename", ""),
+        "current_role": candidate_data.get("current_role", "")
+    })
 
-    mapping.append(
-        {
-            "candidate_name":
-                candidate_name,
-
-            "resume_filename":
-                candidate_data.get("resume_filename", ""),
-
-            "current_role":
-                candidate_data.get("current_role", "")
-        }
-    )
-
-    save_index(index)
-    save_mapping(mapping)
+    save_index(index, recruiter_id)
+    save_mapping(mapping, recruiter_id)
 
     # Save to candidate_embeddings.json cache
+    paths = get_paths(recruiter_id)
     try:
         cache = {}
-        if os.path.exists(CACHE_PATH):
-            with open(CACHE_PATH, "r") as f:
+        if os.path.exists(paths["cache"]):
+            with open(paths["cache"], "r") as f:
                 cache = json.load(f)
         cache[candidate_name] = embedding
-        os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
-        with open(CACHE_PATH, "w") as f:
+        with open(paths["cache"], "w") as f:
             json.dump(cache, f, indent=4)
     except Exception as e:
         print(f"Error caching embedding in add_candidate: {e}")
 
-
-def rebuild_index_from_parsed_json(parsed_json_folder="parsed_json"):
+def rebuild_index_from_parsed_json(parsed_json_folder=None, recruiter_id=None):
+    if parsed_json_folder is None:
+        parsed_json_folder = f"parsed_json/{recruiter_id}" if recruiter_id is not None else "parsed_json"
+        
     index = create_index()
     mapping = []
     cache = {}
+    paths = get_paths(recruiter_id)
 
-    if os.path.exists(CACHE_PATH):
+    if os.path.exists(paths["cache"]):
         try:
-            with open(CACHE_PATH, "r") as f:
+            with open(paths["cache"], "r") as f:
                 cache = json.load(f)
         except Exception as e:
             print(f"Error loading cache: {e}")
@@ -116,13 +104,10 @@ def rebuild_index_from_parsed_json(parsed_json_folder="parsed_json"):
                     candidate = json.load(f)
 
                 candidate_name = candidate.get("candidate_name", "Unknown_Candidate")
-                
-                # Use filename as the cache key to prevent collision for candidates with identical names
                 cache_key = filename
                 embedding = cache.get(cache_key)
 
                 if not embedding:
-                    # Fallback to candidate_name for backward compatibility
                     embedding = cache.get(candidate_name)
                     if not embedding:
                         search_profile = candidate.get("search_profile", "")
@@ -144,60 +129,44 @@ def rebuild_index_from_parsed_json(parsed_json_folder="parsed_json"):
             except Exception as e:
                 print(f"Error indexing candidate file {filename}: {e}")
 
-    os.makedirs(os.path.dirname(INDEX_PATH), exist_ok=True)
-    save_index(index)
-    save_mapping(mapping)
+    save_index(index, recruiter_id)
+    save_mapping(mapping, recruiter_id)
 
     if cache_modified:
         try:
-            os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
-            with open(CACHE_PATH, "w") as f:
+            with open(paths["cache"], "w") as f:
                 json.dump(cache, f, indent=4)
         except Exception as e:
             print(f"Error saving cache: {e}")
 
-
-def search_candidates(query_embedding, top_k=10):
-
-    index = load_index()
-
-    mapping = load_mapping()
-
+def search_candidates(query_embedding, top_k=10, recruiter_id=None):
+    index = load_index(recruiter_id)
+    mapping = load_mapping(recruiter_id)
     query = normalize(query_embedding)
-
-    scores, indices = index.search(
-        query,
-        top_k
-    )
+    scores, indices = index.search(query, top_k)
 
     results = []
-
-    for score, idx in zip(
-        scores[0],
-        indices[0]
-    ):
-
+    for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
             continue
-
-        candidate = mapping[idx]
-
-        candidate["score"] = float(score)
-
-        results.append(candidate)
-
+        if idx < len(mapping):
+            candidate = mapping[idx].copy()
+            candidate["score"] = float(score)
+            results.append(candidate)
     return results
 
-
-def rebuild_index_from_json(parsed_json_dir="parsed_json"):
+def rebuild_index_from_json(parsed_json_dir=None, recruiter_id=None):
+    if parsed_json_dir is None:
+        parsed_json_dir = f"parsed_json/{recruiter_id}" if recruiter_id is not None else "parsed_json"
+        
     from services.embedding_service import create_embedding
 
     index = create_index()
     mapping = []
 
     if not os.path.exists(parsed_json_dir):
-        save_index(index)
-        save_mapping(mapping)
+        save_index(index, recruiter_id)
+        save_mapping(mapping, recruiter_id)
         return
 
     for filename in os.listdir(parsed_json_dir):
@@ -231,5 +200,5 @@ def rebuild_index_from_json(parsed_json_dir="parsed_json"):
         except Exception as e:
             print(f"Error indexing {filename}: {e}")
 
-    save_index(index)
-    save_mapping(mapping)
+    save_index(index, recruiter_id)
+    save_mapping(mapping, recruiter_id)
