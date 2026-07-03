@@ -193,7 +193,9 @@ def build_candidate_comparison(
         "education": education,
         "strengths": infer_strengths(
             candidate
-        )
+        ),
+        "projects": candidate.get("projects", []),
+        "about_candidate": candidate.get("about_candidate", "")
     }
 
 

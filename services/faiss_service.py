@@ -75,6 +75,21 @@ def add_candidate(candidate_data, embedding, recruiter_id=None):
     except Exception as e:
         print(f"Error caching embedding in add_candidate: {e}")
 
+def _get_all_json_files(folder_path, recursive=False):
+    json_files = []
+    if not os.path.exists(folder_path):
+        return json_files
+    if recursive:
+        for root, dirs, files in os.walk(folder_path):
+            for filename in files:
+                if filename.endswith(".json") and filename != "upload_stats.json" and filename != "active_template.json":
+                    json_files.append((os.path.join(root, filename), filename))
+    else:
+        for filename in os.listdir(folder_path):
+            if filename.endswith(".json") and filename != "upload_stats.json" and filename != "active_template.json":
+                json_files.append((os.path.join(folder_path, filename), filename))
+    return json_files
+
 def rebuild_index_from_parsed_json(parsed_json_folder=None, recruiter_id=None):
     if parsed_json_folder is None:
         parsed_json_folder = f"parsed_json/{recruiter_id}" if recruiter_id is not None else "parsed_json"
@@ -93,12 +108,10 @@ def rebuild_index_from_parsed_json(parsed_json_folder=None, recruiter_id=None):
 
     cache_modified = False
 
-    if os.path.exists(parsed_json_folder):
+    json_files = _get_all_json_files(parsed_json_folder, recursive=(recruiter_id is None))
+    if json_files:
         from services.embedding_service import create_embedding
-        for filename in os.listdir(parsed_json_folder):
-            if not filename.endswith(".json") or filename == "upload_stats.json":
-                continue
-            file_path = os.path.join(parsed_json_folder, filename)
+        for file_path, filename in json_files:
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     candidate = json.load(f)
@@ -164,16 +177,13 @@ def rebuild_index_from_json(parsed_json_dir=None, recruiter_id=None):
     index = create_index()
     mapping = []
 
-    if not os.path.exists(parsed_json_dir):
+    json_files = _get_all_json_files(parsed_json_dir, recursive=(recruiter_id is None))
+    if not json_files:
         save_index(index, recruiter_id)
         save_mapping(mapping, recruiter_id)
         return
 
-    for filename in os.listdir(parsed_json_dir):
-        if not filename.endswith(".json"):
-            continue
-
-        file_path = os.path.join(parsed_json_dir, filename)
+    for file_path, filename in json_files:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 candidate = json.load(f)

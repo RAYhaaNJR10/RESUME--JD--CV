@@ -64,7 +64,8 @@ OUTPUT SCHEMA:
     "strengths": [
         {{
             "strength": "",
-            "score": 1
+            "score": 1,
+            "assessment": ""
         }}
     ],
 
@@ -113,7 +114,8 @@ Format:
 [
     {{
         "strength": "",
-        "score": 1
+        "score": 1,
+        "assessment": ""
     }}
 ]
 
@@ -121,8 +123,15 @@ Rules:
 
 - Strengths must be capabilities, not technologies.
 - Do NOT use AWS, Python, SQL, Linux etc as strengths.
-- Use realistic scores.
-- Most experienced candidates should have a mix of 4 and 5.
+- Score each capability dynamically (1-5) using these guidelines:
+  5 = Strong evidence demonstrated consistently across multiple roles, projects, and responsibilities.
+  4 = Good practical experience with clear supporting evidence.
+  3 = Moderate exposure or working knowledge.
+  2 = Limited experience or brief mention.
+  1 = Minimal or no supporting evidence.
+- The scores should evaluate each strength independently based on actual resume content; do NOT follow a fixed template pattern (like 5, 5, 5, 4, 4).
+- The "assessment" must briefly explain why the candidate received that score using evidence from the resume (e.g. referencing years of experience, specific roles, tasks or projects).
+- Do NOT invent experience or achievements, and do NOT write generic statements. Every assessment must be unique and logically aligned with the score.
 
 Examples:
 

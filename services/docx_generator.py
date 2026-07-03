@@ -1,6 +1,7 @@
 import os
 
 from docx import Document
+from docx.shared import Inches
 
 
 def generate_docx(
@@ -91,7 +92,7 @@ def generate_docx(
 
         table = document.add_table(
             rows=1,
-            cols=2
+            cols=3
         )
 
         table.style = "Table Grid"
@@ -100,10 +101,21 @@ def generate_docx(
 
         header[0].text = "Strength"
         header[1].text = "Score (1-5)"
+        header[2].text = "Assessment"
+
+        # Set header cell widths
+        header[0].width = Inches(2.0)
+        header[1].width = Inches(1.0)
+        header[2].width = Inches(3.5)
 
         for strength in strengths:
 
             row = table.add_row().cells
+
+            # Set row cell widths
+            row[0].width = Inches(2.0)
+            row[1].width = Inches(1.0)
+            row[2].width = Inches(3.5)
 
             row[0].text = str(
                 strength.get(
@@ -115,6 +127,13 @@ def generate_docx(
             row[1].text = str(
                 strength.get(
                     "score",
+                    ""
+                )
+            )
+
+            row[2].text = str(
+                strength.get(
+                    "assessment",
                     ""
                 )
             )

@@ -138,11 +138,13 @@ def register_recruiter(payload: dict):
         
     db = SessionLocal()
     try:
-        existing = db.query(RecruiterModel).filter(
-            (RecruiterModel.username == username) | (RecruiterModel.email == email)
-        ).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Username or email already registered")
+        existing_username = db.query(RecruiterModel).filter(RecruiterModel.username == username).first()
+        if existing_username:
+            raise HTTPException(status_code=400, detail="Username already registered")
+            
+        existing_email = db.query(RecruiterModel).filter(RecruiterModel.email == email).first()
+        if existing_email:
+            raise HTTPException(status_code=409, detail="An account with this email address already exists.")
             
         pw_hash = hash_password(password)
         new_recruiter = RecruiterModel(
@@ -224,36 +226,173 @@ def home():
         "message": "Resume JD CV Platform Running"
     }
 
+def process_and_filter_matching_results(
+    raw_matches: list,
+    jd_text: str,
+    db,
+    filters: dict
+):
+    import re
+    # Tokenize JD text for matching skills calculations
+    jd_text_lower = jd_text.lower()
+    
+    # Common technologies list for detecting missing skills
+    common_skills = {
+        "python", "sql", "aws", "docker", "kubernetes", "git", "ci/cd", "react", "node", "java", "c++",
+        "javascript", "typescript", "mysql", "postgresql", "oracle", "mongodb", "linux", "unix", "bash",
+        "pyspark", "spark", "hadoop", "etl", "jenkins", "terraform", "ansible", "azure", "gcp", "power bi",
+        "tableau", "excel", "html", "css", "django", "flask", "fastapi", "spring", "spring boot", "rest api",
+        "microservices", "jira", "scrum", "agile", "incident management", "problem management", "root cause analysis",
+        "monitoring", "alerting", "troubleshooting", "production support", "active directory"
+    }
+    
+    recruiters = {r.recruiter_id: r.username for r in db.query(RecruiterModel).all()}
+    db_candidates = db.query(CandidateModel).all()
+    db_cand_map = {c.candidate_name: c for c in db_candidates}
+    
+    processed_results = []
+    
+    for match in raw_matches:
+        name = match["candidate_name"]
+        score = match["score"]
+        
+        cand = db_cand_map.get(name)
+        if not cand:
+            continue
+            
+        uploader_username = recruiters.get(cand.recruiter_id, "unknown")
+        
+        # Load parsed JSON
+        safe_name = name.replace("/", "_").replace("\\", "_").replace(":", "_")
+        file_path = os.path.join(PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json")
+        
+        candidate_skills = []
+        candidate_techs = set()
+        current_role = cand.current_role or ""
+        years_of_exp = 0.0
+        
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    js = json.load(f)
+                candidate_skills = js.get("skills", [])
+                current_role = js.get("current_role", "") or current_role
+                years_of_exp = float(js.get("years_of_experience", 0) or 0)
+                
+                # Fetch technologies
+                for exp in js.get("experience", []):
+                    for t in exp.get("technologies", []):
+                        candidate_techs.add(t)
+                for prj in js.get("projects", []):
+                    for t in prj.get("technologies", []):
+                        candidate_techs.add(t)
+            except Exception:
+                pass
+                
+        # Compute top matching skills
+        matching_skills = []
+        candidate_all_skills_lower = {s.lower() for s in candidate_skills} | {t.lower() for t in candidate_techs}
+        
+        for sk in candidate_skills:
+            if sk.lower() in jd_text_lower:
+                matching_skills.append(sk)
+        for t in candidate_techs:
+            if t.lower() in jd_text_lower and t not in matching_skills:
+                matching_skills.append(t)
+                
+        # Compute missing skills
+        missing_skills = []
+        for cs in common_skills:
+            if cs in jd_text_lower:
+                if cs not in candidate_all_skills_lower:
+                    missing_skills.append(cs.title())
+                    
+        # Apply Filters
+        if filters.get("candidate_names"):
+            if name not in filters["candidate_names"]:
+                continue
+                
+        if not filters.get("global_pool", True):
+            if cand.recruiter_id != filters.get("current_recruiter_id"):
+                continue
+                
+        if filters.get("uploader") and filters["uploader"].lower() != uploader_username.lower():
+            continue
+            
+        if filters.get("role") and filters["role"].lower() not in current_role.lower():
+            continue
+            
+        if filters.get("experience"):
+            exp_val = filters["experience"]
+            try:
+                if "-" in exp_val:
+                    parts = exp_val.split("-")
+                    exp_min = float(parts[0])
+                    exp_max = float(parts[1])
+                    if not (exp_min <= years_of_exp <= exp_max):
+                        continue
+                else:
+                    exp_min = float(exp_val)
+                    if years_of_exp < exp_min:
+                        continue
+            except ValueError:
+                pass
+                
+        if filters.get("skills"):
+            req_skill = filters["skills"].lower()
+            if not any(req_skill in sk.lower() for sk in candidate_skills):
+                continue
+                
+        processed_results.append({
+            "candidate_id": cand.candidate_id,
+            "candidate_name": name,
+            "current_role": current_role,
+            "years_of_experience": years_of_exp,
+            "uploaded_by": uploader_username,
+            "score": score,
+            "matching_skills": matching_skills[:8],
+            "missing_skills": missing_skills[:8]
+        })
+        
+    return processed_results
+
 
 @app.post("/rank-candidates")
 def rank_candidates(
     payload: dict,
     recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
-
-    jd_text = payload.get(
-        "jd",
-        ""
-    )
-
+    jd_text = payload.get("jd", "")
     if not jd_text:
-
-        raise HTTPException(
-            status_code=400,
-            detail="JD text is required"
-        )
-
+        raise HTTPException(status_code=400, detail="JD text is required")
+        
+    global_pool = payload.get("global_pool", True)
+    
+    # Run FAISS match
     results = match_candidates(
         jd_text,
         top_k=100,
-        recruiter_id=recruiter.recruiter_id
+        recruiter_id=None if global_pool else recruiter.recruiter_id
     )
-
-    return {
-        "count": len(results),
-        "results": results
-    }
-
+    
+    db = SessionLocal()
+    try:
+        filters = {
+            "global_pool": global_pool,
+            "current_recruiter_id": recruiter.recruiter_id,
+            "experience": payload.get("experience", ""),
+            "role": payload.get("role", ""),
+            "skills": payload.get("skills", ""),
+            "uploader": payload.get("uploader", ""),
+            "candidate_names": payload.get("candidate_names", [])
+        }
+        processed = process_and_filter_matching_results(results, jd_text, db, filters)
+        return {
+            "count": len(processed),
+            "results": processed
+        }
+    finally:
+        db.close()
 
 @app.get("/candidates")
 def get_all_candidates(
@@ -362,6 +501,7 @@ def clear_all_candidates(
     # 4. Rebuild FAISS index (it will be empty for this recruiter)
     try:
         rebuild_index_from_json(recruiter_id=recruiter.recruiter_id)
+        rebuild_index_from_json(recruiter_id=None)
     except Exception as fe:
         print(f"Error rebuilding FAISS index: {fe}")
 
@@ -411,10 +551,173 @@ def delete_single_candidate(
     # Rebuild FAISS index
     try:
         rebuild_index_from_json(recruiter_id=recruiter.recruiter_id)
+        rebuild_index_from_json(recruiter_id=None)
     except Exception as fe:
         print(f"Error rebuilding FAISS index: {fe}")
         
     return {"success": True, "message": f"Candidate {candidate_name} successfully deleted."}
+
+
+@app.post("/candidates/delete-bulk")
+def delete_candidates_bulk(
+    payload: dict,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    """
+    Permanently delete one or more candidates owned by the authenticated recruiter.
+    Accepts: { "candidate_names": ["Name A", "Name B"] }
+    Returns 403 if any candidate belongs to another recruiter.
+    Rolls back entire DB transaction on any failure.
+    """
+    from services.faiss_service import rebuild_index_from_json
+
+    candidate_names = payload.get("candidate_names", [])
+    if not candidate_names or not isinstance(candidate_names, list):
+        raise HTTPException(status_code=400, detail="candidate_names must be a non-empty list")
+
+    rid = recruiter.recruiter_id
+    rec_parsed_dir = os.path.join(PARSED_JSON_FOLDER, str(rid))
+    resumes_dir = os.path.join("uploads", "resumes", str(rid))
+    generated_cvs_dir = os.path.join(GENERATED_CVS_FOLDER, str(rid))
+
+    db = SessionLocal()
+    deleted_names = []
+    resume_filenames = []  # track original resume filenames for fs cleanup
+
+    try:
+        with db_session_lock:
+            # Verify ownership and collect candidates to delete.
+            # Three cases per name:
+            #  (a) Current recruiter owns it → queue for deletion
+            #  (b) Current recruiter does NOT own it AND another recruiter does → 403
+            #  (c) Nobody has it → skip (deleted_count stays 0, no error)
+            candidates_to_delete = []
+            for name in candidate_names:
+                own_cand = db.query(CandidateModel).filter(
+                    CandidateModel.candidate_name == name,
+                    CandidateModel.recruiter_id == rid
+                ).first()
+
+                if own_cand:
+                    # Case (a): recruiter owns this candidate — queue deletion
+                    candidates_to_delete.append(own_cand)
+                else:
+                    # Case (b): check if a different recruiter owns it
+                    foreign_cand = db.query(CandidateModel).filter(
+                        CandidateModel.candidate_name == name,
+                        CandidateModel.recruiter_id != rid
+                    ).first()
+                    if foreign_cand:
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Forbidden: candidate '{name}' does not belong to your account"
+                        )
+                    # Case (c): nobody has it — skip silently
+
+            # Delete all queued candidates in one atomic transaction
+            for cand in candidates_to_delete:
+                if cand.documents and cand.documents.original_resume_filename:
+                    resume_filenames.append(cand.documents.original_resume_filename)
+                deleted_names.append(cand.candidate_name)
+                db.delete(cand)  # cascade deletes Documents + Applications
+
+            db.commit()
+
+    except HTTPException:
+        db.rollback()
+        db.close()
+        raise
+    except Exception as e:
+        db.rollback()
+        db.close()
+        raise HTTPException(status_code=500, detail=f"Database error during bulk delete: {str(e)}")
+    finally:
+        db.close()
+
+    # --- Phase 3: Filesystem cleanup (best-effort, non-fatal) ---
+    # Load FAISS embedding cache to remove entries
+    from services.faiss_service import get_paths
+    import json as _json
+    cache_paths = get_paths(rid)
+    embedding_cache = {}
+    if os.path.exists(cache_paths["cache"]):
+        try:
+            with open(cache_paths["cache"], "r") as f:
+                embedding_cache = _json.load(f)
+        except Exception:
+            embedding_cache = {}
+
+    cache_modified = False
+    for name in deleted_names:
+        # 1. Remove parsed JSON file
+        json_path = os.path.join(rec_parsed_dir, f"{name}.json")
+        if os.path.exists(json_path):
+            try:
+                os.remove(json_path)
+            except Exception as fse:
+                print(f"[delete-bulk] Failed to remove parsed JSON for {name}: {fse}")
+
+        # 2. Remove original resume file (by matching candidate name pattern)
+        if os.path.exists(resumes_dir):
+            # Try exact stored filename first
+            removed = False
+            for stored_fn in resume_filenames:
+                fp = os.path.join(resumes_dir, stored_fn)
+                if os.path.exists(fp):
+                    try:
+                        os.remove(fp)
+                        removed = True
+                    except Exception:
+                        pass
+            # Fallback: scan for files with candidate name pattern
+            if not removed:
+                name_slug = name.replace(" ", "_")
+                for fn in os.listdir(resumes_dir):
+                    if name_slug.lower() in fn.lower():
+                        try:
+                            os.remove(os.path.join(resumes_dir, fn))
+                        except Exception:
+                            pass
+
+        # 3. Remove generated CV files
+        if os.path.exists(generated_cvs_dir):
+            name_slug = name.replace(" ", "_")
+            for fn in os.listdir(generated_cvs_dir):
+                if name_slug.lower() in fn.lower():
+                    try:
+                        os.remove(os.path.join(generated_cvs_dir, fn))
+                    except Exception:
+                        pass
+
+        # 4. Remove from FAISS embedding cache
+        for cache_key in [name, f"{name}.json"]:
+            if cache_key in embedding_cache:
+                del embedding_cache[cache_key]
+                cache_modified = True
+
+    # Persist updated embedding cache
+    if cache_modified:
+        try:
+            with open(cache_paths["cache"], "w") as f:
+                _json.dump(embedding_cache, f, indent=4)
+        except Exception as ce:
+            print(f"[delete-bulk] Failed to update embedding cache: {ce}")
+
+    # --- Phase 4: Rebuild FAISS index for this recruiter ---
+    try:
+        rebuild_index_from_json(recruiter_id=rid)
+        rebuild_index_from_json(recruiter_id=None)
+    except Exception as fe:
+        print(f"[delete-bulk] Error rebuilding FAISS index after bulk delete: {fe}")
+
+    return {
+        "success": True,
+        "deleted_count": len(deleted_names),
+        "deleted": deleted_names,
+        "message": f"{len(deleted_names)} candidate(s) permanently deleted."
+    }
+
+
 
 
 @app.get("/candidate/{candidate_name}")
@@ -790,11 +1093,15 @@ def process_single_resume_worker(filename: str, temp_path: str, content: bytes, 
             candidate = json.loads(parsed_json)
             json_time = time.time() - t_json_start
             
-            try:
-                with open(cache_path, "w", encoding="utf-8") as cf:
-                    json.dump(candidate, cf, indent=4, ensure_ascii=False)
-            except Exception:
-                pass
+            # Only cache if the response has a valid candidate_name.
+            # This prevents poisoned cache entries from incomplete extractions.
+            candidate_name_check = candidate.get("candidate_name", "").strip()
+            if candidate_name_check:
+                try:
+                    with open(cache_path, "w", encoding="utf-8") as cf:
+                        json.dump(candidate, cf, indent=4, ensure_ascii=False)
+                except Exception:
+                    pass
         else:
             json_time = 0.0
 
@@ -944,7 +1251,15 @@ async def upload_resumes(
         try:
             candidate_name = candidate.get("candidate_name", "").strip()
             if not candidate_name:
+                candidate_name = candidate.get("name", "").strip()
+            if not candidate_name:
+                candidate_name = candidate.get("full_name", "").strip()
+                
+            if not candidate_name:
                 raise ValueError("Candidate name could not be parsed from the resume.")
+            
+            # Ensure the correct key is populated for the rest of the application
+            candidate["candidate_name"] = candidate_name
 
             search_profile = candidate.get("search_profile", "")
             if not search_profile:
@@ -1155,6 +1470,10 @@ async def upload_resumes(
     if uploaded_candidates:
         t_faiss_start = time.time()
         rebuild_index_from_json(recruiter_id=recruiter.recruiter_id)
+        try:
+            rebuild_index_from_json(recruiter_id=None)
+        except Exception as ge:
+            print(f"Error rebuilding global FAISS index: {ge}")
         faiss_time = time.time() - t_faiss_start
         print(f"FAISS indexing time (batch) ... {faiss_time:.2f}s\n")
         
@@ -1326,6 +1645,566 @@ def delete_active_template(
         "success": deleted,
         "message": "Template removed successfully" if deleted else "No template to remove"
     }
+# ==========================================
+# MULTI-PAGE PLATFORM REDESIGN ENDPOINTS
+# ==========================================
+
+@app.get("/api/candidates")
+def api_get_candidates(
+    global_pool: bool = False,
+    search: str = "",
+    recruiter: str = "",
+    skills: str = "",
+    tech: str = "",
+    experience: str = "",
+    page: int = 1,
+    limit: int = 20,
+    sort_by: str = "candidate_name",
+    sort_order: str = "asc",
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        query = db.query(CandidateModel)
+        if not global_pool:
+            query = query.filter(CandidateModel.recruiter_id == current_recruiter.recruiter_id)
+        
+        db_candidates = query.all()
+        candidates_list = []
+        
+        recruiters = {r.recruiter_id: r.username for r in db.query(RecruiterModel).all()}
+        
+        for cand in db_candidates:
+            safe_name = cand.candidate_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            file_path = os.path.join(PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json")
+            
+            cand_data = {
+                "candidate_id": cand.candidate_id,
+                "candidate_name": cand.candidate_name,
+                "employee_id": cand.employee_id,
+                "email": cand.email or "",
+                "phone": cand.phone or "",
+                "current_role": "",
+                "years_of_experience": 0.0,
+                "skills": [],
+                "technologies": [],
+                "uploaded_by": recruiters.get(cand.recruiter_id, "unknown"),
+                "created_at": cand.created_at.isoformat(),
+                "updated_at": cand.updated_at.isoformat(),
+                "filename": ""
+            }
+            
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        js = json.load(f)
+                    cand_data["current_role"] = js.get("current_role", "")
+                    cand_data["years_of_experience"] = float(js.get("years_of_experience", 0) or 0)
+                    cand_data["skills"] = js.get("skills", [])
+                    cand_data["filename"] = js.get("resume_filename", "")
+                    
+                    techs = set()
+                    for exp in js.get("experience", []):
+                        for t in exp.get("technologies", []):
+                            techs.add(t)
+                    for prj in js.get("projects", []):
+                        for t in prj.get("technologies", []):
+                            techs.add(t)
+                    cand_data["technologies"] = list(techs)
+                except Exception:
+                    pass
+            
+            if search:
+                s_lower = search.lower()
+                matches_search = (
+                    s_lower in cand_data["candidate_name"].lower() or
+                    s_lower in cand_data["current_role"].lower() or
+                    s_lower in cand_data["email"].lower() or
+                    any(s_lower in sk.lower() for sk in cand_data["skills"])
+                )
+                if not matches_search:
+                    continue
+            
+            if recruiter and recruiter.lower() != cand_data["uploaded_by"].lower():
+                continue
+                
+            if skills:
+                sk_lower = skills.lower()
+                if not any(sk_lower in sk.lower() for sk in cand_data["skills"]):
+                    continue
+                    
+            if tech:
+                tech_lower = tech.lower()
+                if not any(tech_lower in t.lower() for t in cand_data["technologies"]):
+                    continue
+                    
+            if experience:
+                try:
+                    if "-" in experience:
+                        parts = experience.split("-")
+                        exp_min = float(parts[0])
+                        exp_max = float(parts[1])
+                        if not (exp_min <= cand_data["years_of_experience"] <= exp_max):
+                            continue
+                    else:
+                        exp_min = float(experience)
+                        if cand_data["years_of_experience"] < exp_min:
+                            continue
+                except ValueError:
+                    pass
+                    
+            candidates_list.append(cand_data)
+            
+        reverse = (sort_order.lower() == "desc")
+        if sort_by in ["created_at", "upload_date"]:
+            candidates_list.sort(key=lambda x: x["created_at"], reverse=reverse)
+        elif sort_by in ["years_of_experience", "experience"]:
+            candidates_list.sort(key=lambda x: x["years_of_experience"], reverse=reverse)
+        elif sort_by == "current_role":
+            candidates_list.sort(key=lambda x: x["current_role"].lower(), reverse=reverse)
+        else:
+            candidates_list.sort(key=lambda x: x["candidate_name"].lower(), reverse=reverse)
+            
+        total = len(candidates_list)
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        paginated_results = candidates_list[start_idx:end_idx]
+        
+        return {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "results": paginated_results
+        }
+    finally:
+        db.close()
 
 
-# Reload trigger to force load new database environment variables from .env
+@app.get("/api/candidates/metadata")
+def api_get_candidates_metadata(
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        recruiters = [r.username for r in db.query(RecruiterModel).all()]
+        all_candidates = db.query(CandidateModel).all()
+        unique_skills = set()
+        unique_techs = set()
+        unique_roles = set()
+        
+        for cand in all_candidates:
+            safe_name = cand.candidate_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            file_path = os.path.join(PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json")
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        js = json.load(f)
+                    
+                    role = js.get("current_role", "")
+                    if role:
+                        unique_roles.add(role.strip())
+                        
+                    for sk in js.get("skills", []):
+                        if sk:
+                            unique_skills.add(sk.strip())
+                            
+                    for exp in js.get("experience", []):
+                        for t in exp.get("technologies", []):
+                            unique_techs.add(t.strip())
+                    for prj in js.get("projects", []):
+                        for t in prj.get("technologies", []):
+                            unique_techs.add(t.strip())
+                except Exception:
+                    pass
+                    
+        return {
+            "recruiters": sorted(list(recruiters)),
+            "skills": sorted(list(unique_skills))[:100],
+            "technologies": sorted(list(unique_techs))[:100],
+            "roles": sorted(list(unique_roles))[:100]
+        }
+    finally:
+        db.close()
+
+
+# Overwrite get_candidate_details to query across recruiters
+@app.get("/candidate/{candidate_name}")
+def get_candidate_details(
+    candidate_name: str,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        # Search candidate globally in DB
+        cand = db.query(CandidateModel).filter(CandidateModel.candidate_name == candidate_name).first()
+        cand_recruiter_id = cand.recruiter_id if cand else recruiter.recruiter_id
+        
+        file_path = os.path.join(
+            PARSED_JSON_FOLDER,
+            str(cand_recruiter_id),
+            f"{candidate_name}.json"
+        )
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Candidate not found"
+            )
+            
+        with open(file_path, "r", encoding="utf-8") as f:
+            candidate_data = json.load(f)
+            
+        uploader = db.query(RecruiterModel).filter(RecruiterModel.recruiter_id == cand_recruiter_id).first()
+        candidate_data["uploaded_by"] = uploader.username if uploader else "unknown"
+        candidate_data["uploaded_date"] = cand.created_at.isoformat() if cand else ""
+        candidate_data["candidate_id"] = cand.candidate_id if cand else None
+        
+        return candidate_data
+    finally:
+        db.close()
+
+
+# Job Description CRUD APIs
+@app.post("/api/job-descriptions")
+def create_job_description(
+    payload: dict,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    title = payload.get("title")
+    description = payload.get("description")
+    if not title or not description:
+        raise HTTPException(status_code=400, detail="Title and description are required")
+    db = SessionLocal()
+    try:
+        jd = JobDescriptionModel(
+            recruiter_id=recruiter.recruiter_id,
+            short_title=title,
+            full_description=description,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(jd)
+        db.commit()
+        db.refresh(jd)
+        return {"success": True, "jd_id": jd.jd_id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.get("/api/job-descriptions")
+def list_job_descriptions(
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        jds = db.query(JobDescriptionModel).all()
+        results = []
+        for jd in jds:
+            uploader = db.query(RecruiterModel).filter(RecruiterModel.recruiter_id == jd.recruiter_id).first()
+            match_count = db.query(ApplicationModel).filter(ApplicationModel.jd_id == jd.jd_id).count()
+            results.append({
+                "jd_id": jd.jd_id,
+                "title": jd.short_title,
+                "description": jd.full_description,
+                "created_by": uploader.username if uploader else "unknown",
+                "created_date": jd.created_at.isoformat(),
+                "match_count": match_count
+            })
+        return results
+    finally:
+        db.close()
+
+
+@app.get("/api/job-descriptions/{jd_id}")
+def get_job_description(
+    jd_id: int,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        jd = db.query(JobDescriptionModel).filter(JobDescriptionModel.jd_id == jd_id).first()
+        if not jd:
+            raise HTTPException(status_code=404, detail="Job description not found")
+        uploader = db.query(RecruiterModel).filter(RecruiterModel.recruiter_id == jd.recruiter_id).first()
+        return {
+            "jd_id": jd.jd_id,
+            "title": jd.short_title,
+            "description": jd.full_description,
+            "created_by": uploader.username if uploader else "unknown",
+            "created_date": jd.created_at.isoformat()
+        }
+    finally:
+        db.close()
+
+
+@app.put("/api/job-descriptions/{jd_id}")
+def update_job_description(
+    jd_id: int,
+    payload: dict,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    title = payload.get("title")
+    description = payload.get("description")
+    if not title or not description:
+        raise HTTPException(status_code=400, detail="Title and description are required")
+    db = SessionLocal()
+    try:
+        jd = db.query(JobDescriptionModel).filter(JobDescriptionModel.jd_id == jd_id).first()
+        if not jd:
+            raise HTTPException(status_code=404, detail="Job description not found")
+        jd.short_title = title
+        jd.full_description = description
+        jd.updated_at = datetime.utcnow()
+        db.commit()
+        return {"success": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.delete("/api/job-descriptions/{jd_id}")
+def delete_job_description(
+    jd_id: int,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        jd = db.query(JobDescriptionModel).filter(JobDescriptionModel.jd_id == jd_id).first()
+        if not jd:
+            raise HTTPException(status_code=404, detail="Job description not found")
+        db.delete(jd)
+        db.commit()
+        return {"success": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.get("/api/job-descriptions/{jd_id}/matches")
+def api_get_jd_matches(
+    jd_id: int,
+    global_pool: bool = True,
+    experience: str = "",
+    role: str = "",
+    skills: str = "",
+    uploader: str = "",
+    candidate_names: str = "",
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        jd = db.query(JobDescriptionModel).filter(JobDescriptionModel.jd_id == jd_id).first()
+        if not jd:
+            raise HTTPException(status_code=404, detail="Job description not found")
+        
+        results = match_candidates(
+            jd.full_description,
+            top_k=100,
+            recruiter_id=None if global_pool else current_recruiter.recruiter_id
+        )
+        
+        cand_list = []
+        if candidate_names:
+            cand_list = [n.strip() for n in candidate_names.split(",") if n.strip()]
+            
+        filters = {
+            "global_pool": global_pool,
+            "current_recruiter_id": current_recruiter.recruiter_id,
+            "experience": experience,
+            "role": role,
+            "skills": skills,
+            "uploader": uploader,
+            "candidate_names": cand_list
+        }
+        
+        processed = process_and_filter_matching_results(results, jd.full_description, db, filters)
+        return processed
+    finally:
+        db.close()
+
+
+# Generated CVs APIs
+@app.get("/api/generated-cvs")
+def api_get_generated_cvs(
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        docs = db.query(DocumentModel).filter(DocumentModel.generated_cv_blob != None).all()
+        results = []
+        recruiters = {r.recruiter_id: r.username for r in db.query(RecruiterModel).all()}
+        
+        for doc in docs:
+            cand = db.query(CandidateModel).filter(CandidateModel.candidate_id == doc.candidate_id).first()
+            if not cand:
+                continue
+                
+            app = db.query(ApplicationModel).filter(
+                ApplicationModel.candidate_id == cand.candidate_id,
+                ApplicationModel.status == "CV_GENERATED"
+            ).first()
+            
+            jd_title = "General"
+            if app:
+                jd = db.query(JobDescriptionModel).filter(JobDescriptionModel.jd_id == app.jd_id).first()
+                if jd:
+                    jd_title = jd.short_title
+            
+            results.append({
+                "candidate_id": cand.candidate_id,
+                "candidate_name": cand.candidate_name,
+                "generated_cv_filename": doc.generated_cv_filename,
+                "jd_title": jd_title,
+                "generated_by": recruiters.get(cand.recruiter_id, "unknown"),
+                "generated_date": doc.updated_at.isoformat()
+            })
+            
+        return results
+    finally:
+        db.close()
+
+
+@app.get("/api/generated-cvs/{candidate_id}/download")
+def api_download_generated_cv(
+    candidate_id: int,
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        doc = db.query(DocumentModel).filter(DocumentModel.candidate_id == candidate_id).first()
+        if not doc or not doc.generated_cv_blob:
+            raise HTTPException(status_code=404, detail="Generated CV not found")
+        
+        import io
+        from fastapi.responses import StreamingResponse
+        
+        headers = {
+            "Content-Disposition": f"attachment; filename=\"{doc.generated_cv_filename}\""
+        }
+        return StreamingResponse(
+            io.BytesIO(doc.generated_cv_blob),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers=headers
+        )
+    finally:
+        db.close()
+
+
+# Company Analytics API
+@app.get("/api/analytics")
+def api_get_analytics(
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        recruiters = db.query(RecruiterModel).all()
+        recruiter_mapping = {r.recruiter_id: r.username for r in recruiters}
+        recruiter_counts = {}
+        for r in recruiters:
+            recruiter_counts[r.username] = 0
+            
+        all_candidates = db.query(CandidateModel).all()
+        for cand in all_candidates:
+            username = recruiter_mapping.get(cand.recruiter_id, "unknown")
+            recruiter_counts[username] = recruiter_counts.get(username, 0) + 1
+            
+        unique_skills = {}
+        exp_dist = {"Fresher (0 yrs)": 0, "1-3 Years": 0, "3-5 Years": 0, "5-10 Years": 0, "10+ Years": 0}
+        
+        for cand in all_candidates:
+            safe_name = cand.candidate_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            file_path = os.path.join(PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json")
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        js = json.load(f)
+                    
+                    yrs = float(js.get("years_of_experience", 0) or 0)
+                    if yrs == 0:
+                        exp_dist["Fresher (0 yrs)"] += 1
+                    elif yrs <= 3:
+                        exp_dist["1-3 Years"] += 1
+                    elif yrs <= 5:
+                        exp_dist["3-5 Years"] += 1
+                    elif yrs <= 10:
+                        exp_dist["5-10 Years"] += 1
+                    else:
+                        exp_dist["10+ Years"] += 1
+                        
+                    for sk in js.get("skills", []):
+                        sk_clean = sk.strip().title()
+                        if sk_clean:
+                            unique_skills[sk_clean] = unique_skills.get(sk_clean, 0) + 1
+                except Exception:
+                    pass
+                    
+        top_skills = sorted(unique_skills.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_skills_dict = {k: v for k, v in top_skills}
+        
+        jds = db.query(JobDescriptionModel).all()
+        jd_counts = []
+        for jd in jds:
+            usage = db.query(ApplicationModel).filter(ApplicationModel.jd_id == jd.jd_id).count()
+            jd_counts.append({"title": jd.short_title, "count": usage})
+        jd_counts = sorted(jd_counts, key=lambda x: x["count"], reverse=True)[:5]
+        
+        scores = db.query(ApplicationModel.similarity_score).filter(ApplicationModel.similarity_score != None).all()
+        avg_score = 0.0
+        if scores:
+            avg_score = sum(s[0] for s in scores) / len(scores)
+            
+        from sqlalchemy import func
+        trend_query = db.query(
+            func.date(CandidateModel.created_at),
+            func.count(CandidateModel.candidate_id)
+        ).group_by(func.date(CandidateModel.created_at)).order_by(func.date(CandidateModel.created_at)).all()
+        
+        upload_trends = {str(d): count for d, count in trend_query}
+        
+        return {
+            "recruiter_distribution": recruiter_counts,
+            "experience_distribution": exp_dist,
+            "skill_distribution": top_skills_dict,
+            "most_used_jds": jd_counts,
+            "average_match_score": round(avg_score * 100, 1) if avg_score else 0.0,
+            "upload_trends": upload_trends
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/change-password")
+def change_password(
+    payload: dict,
+    recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    old_password = payload.get("old_password")
+    new_password = payload.get("new_password")
+    if not old_password or not new_password:
+        raise HTTPException(status_code=400, detail="Current and new password are required")
+        
+    db = SessionLocal()
+    try:
+        rec = db.query(RecruiterModel).filter(RecruiterModel.recruiter_id == recruiter.recruiter_id).first()
+        if not rec or not verify_password(old_password, rec.password_hash):
+            raise HTTPException(status_code=400, detail="Invalid current password")
+            
+        rec.password_hash = hash_password(new_password)
+        rec.updated_at = datetime.utcnow()
+        db.commit()
+        return {"success": True, "message": "Password changed successfully"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
