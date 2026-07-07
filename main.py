@@ -268,16 +268,18 @@ def process_and_filter_matching_results(
         
         candidate_skills = []
         candidate_techs = set()
-        current_role = cand.current_role or ""
+        current_role = ""
         years_of_exp = 0.0
+        search_profile = ""
         
         if os.path.exists(file_path):
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     js = json.load(f)
                 candidate_skills = js.get("skills", [])
-                current_role = js.get("current_role", "") or current_role
+                current_role = js.get("current_role", "")
                 years_of_exp = float(js.get("years_of_experience", 0) or 0)
+                search_profile = js.get("search_profile", "")
                 
                 # Fetch technologies
                 for exp in js.get("experience", []):
@@ -351,7 +353,8 @@ def process_and_filter_matching_results(
             "uploaded_by": uploader_username,
             "score": score,
             "matching_skills": matching_skills[:8],
-            "missing_skills": missing_skills[:8]
+            "missing_skills": missing_skills[:8],
+            "search_profile": search_profile
         })
         
     return processed_results
@@ -2030,7 +2033,223 @@ def api_get_jd_matches(
         db.close()
 
 
-# Generated CVs APIs
+# ─────────────────────────────────────────────────────────────
+# AI SEMANTIC TALENT SEARCH
+# Reuses existing embedding_service + faiss_service — no duplication
+# ─────────────────────────────────────────────────────────────
+@app.post("/api/candidates/semantic-search")
+def api_semantic_talent_search(
+    payload: dict,
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    """
+    Natural-language semantic candidate search using FAISS + OpenAI embeddings.
+
+    Request body:
+      {
+        "query":      "Backend developer with FastAPI",   # required
+        "top_k":      20,                                  # optional, default 20
+        "min_score":  0.30,                                # optional, cosine sim threshold
+        "experience": "3-5",                               # optional filter
+        "role":       "",                                  # optional filter
+        "recruiter":  ""                                   # optional filter
+      }
+
+    Returns ranked candidates with semantic scores and AI-generated match explanations.
+    """
+    from services.embedding_service import create_embedding
+    from services.faiss_service import search_candidates
+
+    query = (payload.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Search query is required.")
+
+    top_k     = int(payload.get("top_k", 20))
+    min_score = float(payload.get("min_score", 0.30))
+    exp_filter       = payload.get("experience", "")
+    role_filter      = payload.get("role", "")
+    recruiter_filter = payload.get("recruiter", "")
+
+    # 1. Embed the query using the existing embedding service
+    try:
+        query_embedding = create_embedding(query)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Embedding service error: {e}")
+
+    # 2. FAISS global search — reuse existing search_candidates function
+    raw_matches = search_candidates(query_embedding, top_k=max(top_k * 3, 60), recruiter_id=None)
+
+    # 3. Enrich with DB metadata and apply filters
+    db = SessionLocal()
+    try:
+        recruiters    = {r.recruiter_id: r.username for r in db.query(RecruiterModel).all()}
+        db_cand_map   = {c.candidate_name: c for c in db.query(CandidateModel).all()}
+
+        enriched = []
+        for match in raw_matches:
+            score = float(match["score"])
+            if score < min_score:
+                continue  # below similarity threshold
+
+            name  = match["candidate_name"]
+            cand  = db_cand_map.get(name)
+            if not cand:
+                continue
+
+            uploader = recruiters.get(cand.recruiter_id, "unknown")
+
+            # Apply optional filters
+            if recruiter_filter and recruiter_filter.lower() != uploader.lower():
+                continue
+
+            # Load parsed JSON profile
+            safe_name = name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            file_path = os.path.join(
+                PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json"
+            )
+
+            profile_data = {}
+            skills        = []
+            current_role  = ""
+            years_of_exp  = 0.0
+            about         = ""
+            strengths_raw = []
+
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        profile_data = json.load(f)
+                    skills       = profile_data.get("skills", [])
+                    current_role = profile_data.get("current_role", "")
+                    years_of_exp = float(profile_data.get("years_of_experience", 0) or 0)
+                    about        = profile_data.get("about_candidate", "")
+                    strengths_raw = profile_data.get("strengths", [])
+                except Exception:
+                    pass
+
+            # Apply role filter
+            if role_filter and role_filter.lower() not in current_role.lower():
+                continue
+
+            # Apply experience filter
+            if exp_filter:
+                try:
+                    if "-" in exp_filter:
+                        lo, hi = (float(x) for x in exp_filter.split("-"))
+                        if not (lo <= years_of_exp <= hi):
+                            continue
+                    else:
+                        lo = float(exp_filter)
+                        if years_of_exp < lo:
+                            continue
+                except ValueError:
+                    pass
+
+            # Build top technologies from experience + projects
+            techs = set()
+            for exp in profile_data.get("experience", []):
+                techs.update(exp.get("technologies", []))
+            for prj in profile_data.get("projects", []):
+                techs.update(prj.get("technologies", []))
+
+            from services.comparison_service import infer_strengths
+            strengths = infer_strengths(profile_data)
+
+            enriched.append({
+                "candidate_id":      cand.candidate_id,
+                "candidate_name":    name,
+                "current_role":      current_role,
+                "years_of_experience": years_of_exp,
+                "uploaded_by":       uploader,
+                "score":             score,
+                "skills":            skills[:10],
+                "technologies":      sorted(list(techs))[:8],
+                "about_candidate":   about,
+                "strengths":         strengths,
+                # store full profile fields for explanation generation
+                "_profile":          profile_data,
+            })
+
+            if len(enriched) >= top_k:
+                break
+
+    finally:
+        db.close()
+
+    if not enriched:
+        return {
+            "count": 0,
+            "query": query,
+            "results": [],
+            "message": "No relevant candidates were found. Try broadening your search or upload additional resumes."
+        }
+
+    # 4. Generate AI match explanations in parallel (ThreadPoolExecutor, max 5 workers)
+    from openai import OpenAI
+    from dotenv import load_dotenv
+    load_dotenv()
+    _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    def _generate_explanation(item):
+        """Generate a one-sentence match explanation for a single candidate."""
+        try:
+            name  = item["candidate_name"]
+            role  = item["current_role"]
+            exp   = item["years_of_experience"]
+            sks   = ", ".join(item["skills"][:6]) if item["skills"] else "N/A"
+            about = (item["about_candidate"] or "")[:300]
+
+            prompt = (
+                f"You are a recruitment assistant. In ONE concise sentence (max 25 words), "
+                f"explain why this candidate matches the search query: \"{query}\".\n\n"
+                f"Candidate: {name}\n"
+                f"Role: {role}\n"
+                f"Experience: {exp} years\n"
+                f"Key skills: {sks}\n"
+                f"Profile: {about}\n\n"
+                f"Respond with only the single explanation sentence."
+            )
+
+            resp = _openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=60,
+                temperature=0.4
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception:
+            return ""
+
+    # Only generate explanations for the top 10 results to control cost
+    EXPLAIN_LIMIT = 10
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        explanation_futures = {
+            executor.submit(_generate_explanation, item): idx
+            for idx, item in enumerate(enriched[:EXPLAIN_LIMIT])
+        }
+        explanations = [""] * len(enriched)
+        for future, idx in explanation_futures.items():
+            try:
+                explanations[idx] = future.result(timeout=15)
+            except Exception:
+                explanations[idx] = ""
+
+    # 5. Build final response (strip internal _profile field)
+    results_out = []
+    for idx, item in enumerate(enriched):
+        item.pop("_profile", None)
+        item["explanation"] = explanations[idx] if idx < len(explanations) else ""
+        item["score_pct"]   = round(item["score"] * 100, 1)
+        results_out.append(item)
+
+    return {
+        "count":   len(results_out),
+        "query":   query,
+        "results": results_out
+    }
+
+
+
 @app.get("/api/generated-cvs")
 def api_get_generated_cvs(
     current_recruiter: RecruiterModel = Depends(get_current_recruiter)
@@ -2093,6 +2312,39 @@ def api_download_generated_cv(
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers=headers
         )
+    finally:
+        db.close()
+
+
+@app.delete("/api/generated-cvs/{candidate_id}")
+def api_delete_generated_cv(
+    candidate_id: int,
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        doc = db.query(DocumentModel).filter(DocumentModel.candidate_id == candidate_id).first()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Clear generated CV filename and blob
+        doc.generated_cv_blob = None
+        doc.generated_cv_filename = None
+        doc.updated_at = datetime.utcnow()
+        
+        # Also find any associated Application and revert its status if it was CV_GENERATED
+        app = db.query(ApplicationModel).filter(
+            ApplicationModel.candidate_id == candidate_id,
+            ApplicationModel.status == "CV_GENERATED"
+        ).first()
+        if app:
+            app.status = "MATCHED"
+            
+        db.commit()
+        return {"success": True, "message": "Generated CV deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
