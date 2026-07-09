@@ -4,19 +4,29 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # Embeddings
-embeddings/*.faiss
-embeddings/*.json
+embeddings/
 
-# Uploaded resumes
+# Uploaded resumes & JDs
 uploads/resumes/
+uploads/jds/
 
 # Generated outputs
 generated_cvs/
 parsed_json/
 
-# VS Code
+# IDE files
 .vscode/
+.idea/
+
+# Virtual Environments
 .venv/
-uploads/
+venv/
+env/
+
+# Logs & profiling
+*.log
+profiling_log.txt
