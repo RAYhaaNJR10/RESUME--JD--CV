@@ -1,1165 +1,2395 @@
-// STATE MANAGEMENT
-const state = {
-    totalCandidates: 0,
-    candidatesList: [],
-    selectedCandidates: new Set(),
-    activeTemplate: { active: false, filename: null },
-    currentJdText: '',
-    jdTab: 'text' // 'text' or 'upload'
-};
+// ═══════════════════════════════════════════════════════
+//  ATS RECRUITMENT PLATFORM — app.js
+//  Reuses all existing backend APIs unchanged.
+// ═══════════════════════════════════════════════════════
 
-const API_BASE = window.location.origin;
+// Auth guard
+if (!localStorage.getItem("access_token")) {
+    window.location.href = "/login";
+}
 
-// DOM ELEMENTS
-const resumesDropzone = document.getElementById('resumes-dropzone');
-const resumesInput = document.getElementById('resumes-input');
-const resumesStatus = document.getElementById('resumes-status');
-const indexedCountLabel = document.getElementById('indexed-count');
-const uploadList = document.getElementById('upload-list');
+// ─── Global State ───────────────────────────────────────
+let currentTab = "dashboard";
+let apiMetadata = { recruiters: [], skills: [], technologies: [], roles: [] };
 
-const templateDropzone = document.getElementById('template-dropzone');
-const templateInput = document.getElementById('template-input');
-const templateStatus = document.getElementById('template-status');
-const activeTemplateName = document.getElementById('active-template-name');
-const activeTemplateDate = document.getElementById('active-template-date');
-const deleteTemplateBtn = document.getElementById('delete-template-btn');
+// Pagination
+let poolCandidatesState = { page: 1, limit: 10, total: 0, sortBy: "candidate_name", sortOrder: "asc" };
 
-const jdTabs = document.querySelectorAll('.jd-tab');
-const jdTextContainer = document.getElementById('jd-text-container');
-const jdUploadContainer = document.getElementById('jd-upload-container');
-const jdTextarea = document.getElementById('jd-textarea');
-const jdDropzone = document.getElementById('jd-dropzone');
-const jdInput = document.getElementById('jd-input');
+// Selection state (Candidate Pool)
+let poolSelectedCompareCandidates = new Set();
+let poolSelectedGenerateCandidates = new Set();
+let activePoolQuery = "";
+let _poolSetupDone = false;
 
-const statTotalCandidates = document.getElementById('stat-total-candidates');
-const statNewCandidates = document.getElementById('stat-new-candidates');
-const statUpdatedCandidates = document.getElementById('stat-updated-candidates');
-const statSelectedCount = document.getElementById('stat-selected-count');
-const resetStatsBtn = document.getElementById('reset-stats-btn');
+// New Recruitment state
+let nrUploadedNames = [];          // names from /upload-resumes
+let nrSelectedCandidates = new Set();
+let _nrSetupDone = false;
 
-const rankBtn = document.getElementById('rank-btn');
-const compareBtn = document.getElementById('compare-btn');
-const generateCvsBtn = document.getElementById('generate-cvs-btn');
+// ═══════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════
 
-const emptyState = document.getElementById('empty-state');
-const candidatesContainer = document.getElementById('candidates-container');
-const candidatesTbody = document.getElementById('candidates-tbody');
-const masterCheckbox = document.getElementById('master-checkbox');
-const selectAllBtn = document.getElementById('select-all-btn');
-const matchingSummary = document.getElementById('matching-summary');
+document.addEventListener("DOMContentLoaded", () => {
+    const apiBaseInput = document.getElementById("apiBase");
+    if (apiBaseInput && !apiBaseInput.value) {
+        apiBaseInput.value = window.location.origin;
+    }
 
-const loadingOverlay = document.getElementById('loading-overlay');
-const loadingText = document.getElementById('loading-text');
-
-const candidateModal = document.getElementById('candidate-modal');
-const closeCandidateModal = document.getElementById('close-candidate-modal');
-const modalCandidateAvatar = document.getElementById('modal-candidate-avatar');
-const modalCandidateName = document.getElementById('modal-candidate-name');
-const modalCandidateRole = document.getElementById('modal-candidate-role');
-const profileDetailsContent = document.getElementById('profile-details-content');
-
-const comparisonModal = document.getElementById('comparison-modal');
-const closeComparisonModal = document.getElementById('close-comparison-modal');
-const comparisonThead = document.getElementById('comparison-thead');
-const comparisonTbody = document.getElementById('comparison-tbody');
-
-const toastContainer = document.getElementById('toast-container');
-
-// INITIALIZATION
-document.addEventListener('DOMContentLoaded', () => {
-    initApp();
+    updateHeaderUserStatus();
+    setupSidebarToggle();
+    setupRouter();
+    bindGlobalListeners();
+    switchView(getHashPage() || "dashboard");
 });
 
-function initApp() {
-    // 1. Fetch active template
-    fetchActiveTemplate();
-
-    // 2. Fetch candidates list count & stats
-    fetchTotalCandidatesCount();
-    fetchUploadStats();
-
-    // 3. Register Drag & Drop events
-    setupDragAndDrop(resumesDropzone, resumesInput, handleResumesUpload);
-    setupDragAndDrop(templateDropzone, templateInput, handleTemplateUpload);
-    setupDragAndDrop(jdDropzone, jdInput, handleJdUpload);
-
-    // 4. Register Action Buttons & Tab listeners
-    setupJdTabs();
-    setupActions();
-    setupModals();
-
-    // Remove initial disabled state to allow recruiter-friendly validation clicks
-    compareBtn.removeAttribute('disabled');
-    generateCvsBtn.removeAttribute('disabled');
+function getApiBase() {
+    const input = document.getElementById("apiBase");
+    return input ? input.value.trim().replace(/\/$/, "") : window.location.origin;
 }
 
-// TOAST NOTIFICATIONS
-function showToast(title, bodyOrType = '', type = 'success') {
-    let body = '';
-    let finalType = type;
-    
-    const knownTypes = ['success', 'error', 'warning', 'info'];
-    if (knownTypes.includes(bodyOrType)) {
-        finalType = bodyOrType;
-        body = '';
-    } else {
-        body = bodyOrType;
+// ─── Auth & Fetch ──────────────────────────────────────
+
+async function authedFetch(url, options = {}) {
+    const token = localStorage.getItem("access_token");
+    if (!options.headers) options.headers = {};
+    if (token) options.headers["Authorization"] = `Bearer ${token}`;
+
+    const response = await fetch(url, options);
+
+    if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("username");
+        window.location.href = "/login";
+        throw new Error("Session expired. Please log in again.");
     }
-
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${finalType}`;
-    
-    let icon = 'fa-circle-info';
-    if (finalType === 'success') icon = 'fa-circle-check';
-    if (finalType === 'error') icon = 'fa-circle-xmark';
-    if (finalType === 'warning') icon = 'fa-circle-exclamation';
-
-    toast.innerHTML = `
-        <i class="fa-solid ${icon}"></i>
-        <div class="toast-content">
-            <strong class="toast-title">${title}</strong>
-            ${body ? `<div class="toast-body">${body}</div>` : ''}
-        </div>
-    `;
-
-    toastContainer.appendChild(toast);
-    
-    // Animate in
-    setTimeout(() => toast.classList.add('show'), 10);
-    
-    // Remove after 4s
-    setTimeout(() => {
-        toast.classList.remove('show');
-        setTimeout(() => toast.remove(), 300);
-    }, 4000);
+    return response;
 }
 
-// LOADING OVERLAY CONTROLLER
-function showLoading(text = 'Processing...') {
-    loadingText.innerText = text;
-    loadingOverlay.style.display = 'flex';
+// ─── UI Helpers ────────────────────────────────────────
 
-    // Disable all action buttons and inputs
-    rankBtn.disabled = true;
-    compareBtn.disabled = true;
-    generateCvsBtn.disabled = true;
-    if (deleteTemplateBtn) deleteTemplateBtn.disabled = true;
-    resumesInput.disabled = true;
-    templateInput.disabled = true;
-    jdInput.disabled = true;
-    jdTextarea.disabled = true;
-    masterCheckbox.disabled = true;
-
-    document.querySelectorAll('.cand-checkbox').forEach(cb => cb.disabled = true);
-    document.querySelectorAll('.jd-tab').forEach(tab => tab.disabled = true);
-
-    resumesDropzone.classList.add('disabled-dropzone');
-    templateDropzone.classList.add('disabled-dropzone');
-    jdDropzone.classList.add('disabled-dropzone');
+function updateHeaderUserStatus() {
+    const username = localStorage.getItem("username") || "Recruiter";
+    document.querySelectorAll("#loggedInUsername, #settingsUsername, #settingsUsernameSession")
+        .forEach(el => { if (el) el.textContent = username; });
 }
 
-function hideLoading() {
-    loadingOverlay.style.display = 'none';
-
-    // Re-enable all action buttons and inputs
-    resumesInput.disabled = false;
-    templateInput.disabled = false;
-    jdInput.disabled = false;
-    jdTextarea.disabled = false;
-    masterCheckbox.disabled = false;
-
-    document.querySelectorAll('.cand-checkbox').forEach(cb => cb.disabled = false);
-    document.querySelectorAll('.jd-tab').forEach(tab => tab.disabled = false);
-
-    resumesDropzone.classList.remove('disabled-dropzone');
-    templateDropzone.classList.remove('disabled-dropzone');
-    jdDropzone.classList.remove('disabled-dropzone');
-
-    rankBtn.disabled = false;
-    if (deleteTemplateBtn && state.activeTemplate && state.activeTemplate.active) {
-        deleteTemplateBtn.disabled = false;
-    }
-    updateSelectionState();
+function showMessage(msg, type = "info") {
+    const alertBox = document.getElementById("alertBox");
+    if (!alertBox) return;
+    alertBox.textContent = msg;
+    alertBox.className = `alert-box ${type}`;
+    alertBox.hidden = false;
+    setTimeout(() => { if (alertBox.textContent === msg) alertBox.hidden = true; }, 7000);
 }
 
-// API: FETCH ACTIVE TEMPLATE
-async function fetchActiveTemplate() {
+function hideMessage() {
+    const alertBox = document.getElementById("alertBox");
+    if (alertBox) alertBox.hidden = true;
+}
+
+function escapeHtml(str) {
+    if (!str) return "";
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function formatToKolkataTime(utcString) {
+    if (!utcString) return "";
     try {
-        const response = await fetch(`${API_BASE}/active-template`);
-        const data = await response.json();
-        updateTemplateUI(data);
-    } catch (error) {
-        console.error('Error fetching active template:', error);
-        showToast('Active Template', 'Failed to check active template.', 'error');
-    }
+        return new Date(utcString).toLocaleDateString("en-IN", {
+            timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric"
+        });
+    } catch { return utcString; }
 }
 
-// API: FETCH TOTAL CANDIDATES
-async function fetchTotalCandidatesCount() {
-    try {
-        const response = await fetch(`${API_BASE}/candidates`);
-        const data = await response.json();
-        state.totalCandidates = data.length;
-        statTotalCandidates.innerText = state.totalCandidates;
-        indexedCountLabel.innerText = `${state.totalCandidates} candidates`;
-    } catch (error) {
-        console.error('Error fetching candidates:', error);
-    }
-}
+// ═══════════════════════════════════════════════════════
+//  SIDEBAR TOGGLE
+// ═══════════════════════════════════════════════════════
 
-// API: FETCH UPLOAD STATS
-async function fetchUploadStats() {
-    try {
-        const response = await fetch(`${API_BASE}/upload-stats`);
-        const data = await response.json();
-        if (statNewCandidates) statNewCandidates.innerText = data.new_candidates || 0;
-        if (statUpdatedCandidates) statUpdatedCandidates.innerText = data.updated_candidates || 0;
-    } catch (error) {
-        console.error('Error fetching upload stats:', error);
-    }
-}
+function setupSidebarToggle() {
+    const sidebar = document.getElementById("appSidebar");
+    const toggle  = document.getElementById("sidebarToggle");
+    if (!sidebar || !toggle) return;
 
-// UPDATE TEMPLATE UI
-function updateTemplateUI(data) {
-    state.activeTemplate = data;
-    if (data && data.active) {
-        activeTemplateName.innerText = data.filename;
-        const uploadDate = data.uploaded_at ? new Date(data.uploaded_at).toLocaleString() : 'Recruiter template';
-        activeTemplateDate.innerText = `Uploaded at: ${uploadDate}`;
-        deleteTemplateBtn.style.display = 'block';
-        statTotalCandidates.parentElement.parentElement.classList.add('template-active'); // style helper if needed
-    } else {
-        activeTemplateName.innerText = 'Default CV Format';
-        activeTemplateDate.innerText = 'Using built-in styling';
-        deleteTemplateBtn.style.display = 'none';
-    }
-}
-
-// DRAG AND DROP UTILITY
-function setupDragAndDrop(dropzoneEl, inputEl, uploadCallback) {
-    // Click dropzone to trigger input
-    dropzoneEl.addEventListener('click', () => {
-        if (!inputEl.disabled) {
-            inputEl.click();
-        }
-    });
-
-    inputEl.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            uploadCallback(e.target.files);
-            inputEl.value = ''; // Reset input
-        }
-    });
-
-    // Drag-over highlights
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropzoneEl.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (!dropzoneEl.classList.contains('disabled-dropzone')) {
-                dropzoneEl.classList.add('dragover');
-            }
-        }, false);
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropzoneEl.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropzoneEl.classList.remove('dragover');
-        }, false);
-    });
-
-    dropzoneEl.addEventListener('drop', (e) => {
-        if (dropzoneEl.classList.contains('disabled-dropzone')) {
-            return;
-        }
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        if (files.length > 0) {
-            uploadCallback(files);
-        }
+    toggle.addEventListener("click", () => {
+        sidebar.classList.toggle("collapsed");
     });
 }
 
-// HANDLER: RESUMES UPLOAD
-async function handleResumesUpload(files) {
-    const filesArray = Array.from(files);
-    const formData = new FormData();
-    let validFilesCount = 0;
+// ═══════════════════════════════════════════════════════
+//  SPA ROUTER
+// ═══════════════════════════════════════════════════════
+
+function getHashPage() {
+    return window.location.hash.replace("#", "") || null;
+}
+
+function setupRouter() {
+    document.querySelectorAll(".menu-item").forEach(item => {
+        item.addEventListener("click", () => {
+            const page = item.getAttribute("data-page");
+            if (page) { window.location.hash = page; switchView(page); }
+        });
+    });
+
+    window.addEventListener("hashchange", () => {
+        const page = getHashPage();
+        if (page) switchView(page);
+    });
+}
+
+function switchView(pageId) {
+    currentTab = pageId;
     
-    // Clear list of previous uploads
-    uploadList.innerHTML = '';
-    resumesStatus.style.display = 'block';
+    document.querySelectorAll(".menu-item").forEach(item => {
+        item.classList.toggle("active", item.getAttribute("data-page") === pageId);
+    });
 
-    const fileStates = {};
-    const timeouts = [];
+    document.querySelectorAll(".page-view").forEach(section => {
+        section.classList.toggle("active", section.id === `page-${pageId}`);
+    });
 
-    for (let i = 0; i < filesArray.length; i++) {
-        const file = filesArray[i];
-        const ext = file.name.split('.').pop().toLowerCase();
-        
-        const item = document.createElement('li');
-        item.className = 'upload-item';
-        item.innerHTML = `
-            <span class="upload-item-name" title="${file.name}">${file.name}</span>
-            <span class="upload-item-status status-parsing" id="upload-item-${i}">
-                <i class="fa-solid fa-spinner fa-spin"></i> Uploading...
-            </span>
-        `;
-        uploadList.appendChild(item);
+    const pageTitles = {
+        "dashboard":         "Dashboard",
+        "new-recruitment":   "New Recruitment",
+        "candidate-pool":    "Candidate Pool",
+        "job-descriptions":  "Job Descriptions",
+        "generated-cvs":     "Generated CVs",
+        "analytics":         "Analytics",
+        "settings":          "Settings"
+    };
 
-        if (ext === 'pdf' || ext === 'docx') {
-            formData.append('files', file);
-            validFilesCount++;
+    const breadcrumb = document.getElementById("activePageBreadcrumb");
+    if (breadcrumb) breadcrumb.textContent = pageTitles[pageId] || pageId;
 
-            // Track states
-            fileStates[file.name] = {
-                index: i,
-                isFinished: false,
-                currentText: 'Uploading...'
-            };
+    loadPageData(pageId);
+}
 
-            // Timed transitions
-            const t1 = setTimeout(() => {
-                if (fileStates[file.name] && !fileStates[file.name].isFinished) {
-                    fileStates[file.name].currentText = 'Parsing...';
-                    const el = document.getElementById(`upload-item-${i}`);
-                    if (el) {
-                        el.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Parsing...`;
-                    }
-                }
-            }, 800 + i * 300);
-            timeouts.push(t1);
+async function loadPageData(pageId) {
+    hideMessage();
+    switch (pageId) {
+        case "dashboard":
+            await loadDashboardStats();
+            await checkActiveTemplate();
+            break;
+        case "new-recruitment":
+            await loadMetadata();
+            setupNewRecruitment();
+            break;
+        case "candidate-pool":
+            setupCandidatePoolPage();
+            clearPoolSearch();
+            break;
+        case "job-descriptions":
+            await fetchJobDescriptions();
+            break;
+        case "generated-cvs":
+            await fetchGeneratedCvs();
+            break;
+        case "analytics":
+            await fetchAnalytics();
+            break;
+    }
+}
 
-            const t2 = setTimeout(() => {
-                if (fileStates[file.name] && !fileStates[file.name].isFinished) {
-                    fileStates[file.name].currentText = 'Generating Embedding...';
-                    const el = document.getElementById(`upload-item-${i}`);
-                    if (el) {
-                        el.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Generating Embedding (${i + 1}/${validFilesCount})... (~3-5s)`;
-                    }
-                }
-            }, 2200 + i * 1200);
-            timeouts.push(t2);
+// ═══════════════════════════════════════════════════════
+//  GLOBAL LISTENERS
+// ═══════════════════════════════════════════════════════
 
-        } else {
-            const statusEl = document.getElementById(`upload-item-${i}`);
-            statusEl.className = 'upload-item-status status-failed';
-            statusEl.innerHTML = `❌ Failed`;
-            showToast('Unsupported resume type', 'Only PDF and DOCX resumes are supported.', 'error');
+function bindGlobalListeners() {
+    // Logout
+    const logoutBtn = document.getElementById("logoutBtn");
+    if (logoutBtn) logoutBtn.addEventListener("click", handleLogoutClick);
+
+    const settingsLogoutBtn = document.getElementById("settingsLogoutBtn");
+    if (settingsLogoutBtn) settingsLogoutBtn.addEventListener("click", handleLogoutClick);
+
+    // Profile drawer close
+    const closeDrawerBtn = document.getElementById("closeDrawerBtn");
+    if (closeDrawerBtn) closeDrawerBtn.addEventListener("click", () => {
+        document.getElementById("candidateProfileDrawer").hidden = true;
+    });
+
+    const candidateProfileDrawer = document.getElementById("candidateProfileDrawer");
+    if (candidateProfileDrawer) {
+        candidateProfileDrawer.addEventListener("click", (e) => {
+            if (e.target === candidateProfileDrawer) candidateProfileDrawer.hidden = true;
+        });
+    }
+
+    // Comparison overlay close
+    const closeComparisonOverlayBtn = document.getElementById("closeComparisonOverlayBtn");
+    if (closeComparisonOverlayBtn) closeComparisonOverlayBtn.addEventListener("click", () => {
+        document.getElementById("candidateComparisonOverlay").hidden = true;
+    });
+
+    const comparisonOverlay = document.getElementById("candidateComparisonOverlay");
+    if (comparisonOverlay) {
+        comparisonOverlay.addEventListener("click", (e) => {
+            if (e.target === comparisonOverlay) comparisonOverlay.hidden = true;
+        });
+    }
+
+    // Delete modal
+    const deleteModalCancelBtn = document.getElementById("deleteModalCancelBtn");
+    if (deleteModalCancelBtn) deleteModalCancelBtn.addEventListener("click", () => {
+        document.getElementById("deleteModalOverlay").hidden = true;
+    });
+
+    // Drawer tabs
+    document.querySelectorAll(".drawer-tab").forEach(tab => {
+        tab.addEventListener("click", () => switchDrawerTab(tab.getAttribute("data-tab")));
+    });
+
+    // Template dropzone
+    setupTemplateDropzone();
+
+    // JD modal
+    setupJdModal();
+
+    // Change password
+    setupChangePassword();
+
+    // Candidate Pool compare/generate buttons are managed inside setupCandidatePoolPage
+
+    // Keyboard: escape closes drawers
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            const drawer = document.getElementById("candidateProfileDrawer");
+            const comparison = document.getElementById("candidateComparisonOverlay");
+            const deleteModal = document.getElementById("deleteModalOverlay");
+            const jdModal = document.getElementById("jdModalOverlay");
+            if (!drawer.hidden) drawer.hidden = true;
+            else if (!comparison.hidden) comparison.hidden = true;
+            else if (!deleteModal.hidden) deleteModal.hidden = true;
+            else if (jdModal && !jdModal.hidden) jdModal.hidden = true;
         }
-    }
+    });
+}
 
-    if (validFilesCount === 0) {
-        return;
-    }
+// ═══════════════════════════════════════════════════════
+//  METADATA
+// ═══════════════════════════════════════════════════════
 
-    showLoading('Parsing resumes & updating FAISS index...');
-
+async function loadMetadata() {
     try {
-        const response = await fetch(`${API_BASE}/upload-resumes`, {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (!response.ok) {
-            throw new Error('Upload failed');
-        }
-        
-        const data = await response.json();
-
-        // Clear all pending timeouts
-        timeouts.forEach(t => clearTimeout(t));
-
-        // Mark all tracked files as finished
-        for (const name in fileStates) {
-            if (fileStates[name]) {
-                fileStates[name].isFinished = true;
-            }
-        }
-
-        // Update items status based on api response
-        const successfulNames = data.uploaded.map(u => u.filename);
-        const failedNames = data.failed.map(f => f.filename);
-
-        for (let i = 0; i < filesArray.length; i++) {
-            const file = filesArray[i];
-            const statusEl = document.getElementById(`upload-item-${i}`);
-            if (!statusEl) continue;
-
-            const ext = file.name.split('.').pop().toLowerCase();
-            if (ext !== 'pdf' && ext !== 'docx') continue;
-
-            const isSuccess = successfulNames.includes(file.name) || !failedNames.includes(file.name);
-            if (isSuccess) {
-                statusEl.className = 'upload-item-status status-success';
-                statusEl.innerHTML = `✅ Indexed`;
-            } else {
-                statusEl.className = 'upload-item-status status-failed';
-                statusEl.innerHTML = `❌ Failed`;
-                showToast('Failed Upload', 'Resume could not be processed. Please try again.', 'error');
-            }
-        }
-
-        fetchTotalCandidatesCount();
-        
-        if (statNewCandidates && typeof data.new_candidates !== 'undefined') {
-            statNewCandidates.innerText = data.new_candidates;
-        }
-        if (statUpdatedCandidates && typeof data.updated_candidates !== 'undefined') {
-            statUpdatedCandidates.innerText = data.updated_candidates;
-        }
-
-        if (data.total_successful > 0) {
-            showToast('Upload Success', `Parsed & indexed ${data.total_successful} resumes successfully!`, 'success');
-        }
-        if (data.total_failed > 0) {
-            showToast('Failed Upload', `Failed to parse ${data.total_failed} resumes.`, 'error');
-        }
-
-    } catch (error) {
-        console.error('Error uploading resumes:', error);
-        showToast('Failed Upload', 'Resume could not be processed. Please try again.', 'error');
-        
-        // Clear all pending timeouts
-        timeouts.forEach(t => clearTimeout(t));
-
-        // Mark all tracked files as failed
-        for (const name in fileStates) {
-            if (fileStates[name]) {
-                fileStates[name].isFinished = true;
-                const index = fileStates[name].index;
-                const statusEl = document.getElementById(`upload-item-${index}`);
-                if (statusEl) {
-                    statusEl.className = 'upload-item-status status-failed';
-                    statusEl.innerHTML = `❌ Failed`;
-                }
-            }
-        }
-    } finally {
-        hideLoading();
-    }
-}// HANDLER: TEMPLATE UPLOAD
-async function handleTemplateUpload(files) {
-    if (files.length === 0) return;
-    const file = files[0];
-    const ext = file.name.split('.').pop().toLowerCase();
-    
-    if (ext !== 'docx') {
-        showToast('CV template must be a DOCX file.', 'warning');
-        return;
-    }
-
-    showLoading('Uploading template...');
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-        const response = await fetch(`${API_BASE}/upload-template`, {
-            method: 'POST',
-            body: formData
-        });
-        const data = await response.json();
-        
-        if (data.status === 'success') {
-            showToast('Recruiter CV template uploaded successfully!', 'success');
-            fetchActiveTemplate();
-        } else {
-            showToast('Failed to upload CV template.', 'error');
-        }
-    } catch (error) {
-        console.error('Error uploading template:', error);
-        showToast('Server error uploading template.', 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// HANDLER: DELETE TEMPLATE
-async function handleDeleteTemplate() {
-    showLoading('Resetting template...');
-    try {
-        const response = await fetch(`${API_BASE}/active-template`, {
-            method: 'DELETE'
-        });
-        const data = await response.json();
-        if (data.status === 'success') {
-            showToast('Template reset. Using default CV format.', 'info');
-            fetchActiveTemplate();
-        }
-    } catch (error) {
-        console.error('Error deleting template:', error);
-        showToast('Failed to reset template.', 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// HANDLER: RESET STATISTICS
-async function handleResetStats() {
-    const confirmed = confirm(
-        "Reset Upload Statistics?\n\nThis will reset:\n\n• New Candidates\n• Updated Candidates\n\nThis will NOT affect:\n\n• Total Indexed Candidates\n• Parsed Resume Database\n• FAISS Index\n• Embedding Cache\n• Candidate Rankings\n• Generated CVs\n• Uploaded Resume Files\n\nDo you want to continue?"
-    );
-    
-    if (!confirmed) return;
-
-    if (resetStatsBtn) resetStatsBtn.disabled = true;
-    showLoading('Resetting upload statistics...');
-    
-    try {
-        const response = await fetch(`${API_BASE}/reset-upload-stats`, {
-            method: 'POST'
-        });
-        
-        if (!response.ok) {
-            throw new Error('Reset request failed');
-        }
-        
-        const data = await response.json();
-        
-        // Update DOM elements immediately
-        if (statNewCandidates) statNewCandidates.innerText = data.new_candidates || 0;
-        if (statUpdatedCandidates) statUpdatedCandidates.innerText = data.updated_candidates || 0;
-        
-        showToast(
-            'Upload statistics have been reset successfully.',
-            'Total indexed candidates remain unchanged.',
-            'success'
-        );
-        
-    } catch (error) {
-        console.error('Error resetting statistics:', error);
-        showToast('Reset Failed', 'Failed to reset upload statistics.', 'error');
-    } finally {
-        if (resetStatsBtn) resetStatsBtn.disabled = false;
-        hideLoading();
-    }
-}
-
-// HANDLER: JD TABS
-function setupJdTabs() {
-    jdTabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            jdTabs.forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-
-            const tabName = tab.getAttribute('data-tab');
-            state.jdTab = tabName;
-
-            if (tabName === 'text') {
-                jdTextContainer.classList.add('active');
-                jdUploadContainer.classList.remove('active');
-            } else {
-                jdTextContainer.classList.remove('active');
-                jdUploadContainer.classList.add('active');
-            }
-        });
-    });
-}
-
-// HANDLER: JD FILE UPLOAD
-async function handleJdUpload(files) {
-    if (files.length === 0) return;
-    const file = files[0];
-    showLoading('Extracting JD text...');
-    
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-        const response = await fetch(`${API_BASE}/upload-jd`, {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (response.status === 200) {
-            const extractedText = await response.text();
-            jdTextarea.value = extractedText;
-            state.currentJdText = extractedText;
-            
-            // Switch tab to text area automatically to show user the text
-            const textTab = document.querySelector('[data-tab="text"]');
-            if (textTab) textTab.click();
-
-            showToast('Job description file parsed successfully!', 'success');
-        } else {
-            const err = await response.json();
-            showToast(err.detail || 'Failed to parse JD file.', 'error');
-        }
-    } catch (error) {
-        console.error('Error parsing JD file:', error);
-        showToast('Error uploading JD file.', 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// ACTION BUTTON EVENTS
-function setupActions() {
-    // 1. Rank Candidates
-    rankBtn.addEventListener('click', () => {
-        if (state.totalCandidates === 0) {
-            showToast('No Resumes Uploaded', 'Please upload candidate resumes in the sidebar before ranking.', 'warning');
-            return;
-        }
-        state.currentJdText = jdTextarea.value.trim();
-        if (!state.currentJdText) {
-            showToast('No Job Description', 'Please paste or upload a Job Description before ranking candidates.', 'warning');
-            return;
-        }
-        rankCandidates(state.currentJdText);
-    });
-
-    // 2. Compare Candidates
-    compareBtn.addEventListener('click', () => {
-        if (state.selectedCandidates.size < 2) {
-            showToast('Compare Candidates', 'Please select two or more candidates before comparing.', 'warning');
-            return;
-        }
-        compareCandidates();
-    });
-
-    // 3. Generate Selected CVs
-    generateCvsBtn.addEventListener('click', () => {
-        if (state.selectedCandidates.size === 0) {
-            showToast('No Candidates Selected', 'Please select one or more candidates before generating CVs.', 'warning');
-            return;
-        }
-        generateSelectedCvs();
-    });
-
-    // 4. Delete Template
-    deleteTemplateBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        handleDeleteTemplate();
-    });
-
-    // 6. Reset Stats
-    if (resetStatsBtn) {
-        resetStatsBtn.addEventListener('click', () => {
-            handleResetStats();
-        });
-    }
-
-    // 5. Select All checkbox logic
-    masterCheckbox.addEventListener('change', (e) => {
-        const checkBoxes = candidatesTbody.querySelectorAll('.cand-checkbox');
-        const checked = e.target.checked;
-        
-        checkBoxes.forEach(cb => {
-            cb.checked = checked;
-            const name = cb.getAttribute('data-name');
-            if (checked) {
-                state.selectedCandidates.add(name);
-            } else {
-                state.selectedCandidates.delete(name);
-            }
-        });
-
-        updateSelectionState();
-    });
-
-    selectAllBtn.addEventListener('click', () => {
-        const checkBoxes = candidatesTbody.querySelectorAll('.cand-checkbox');
-        checkBoxes.forEach(cb => {
-            cb.checked = true;
-            state.selectedCandidates.add(cb.getAttribute('data-name'));
-        });
-        masterCheckbox.checked = true;
-        updateSelectionState();
-    });
-}
-
-// API: RANK CANDIDATES
-async function rankCandidates(jdText) {
-    showLoading('Ranking candidates semantically using FAISS...');
-    state.selectedCandidates.clear();
-    masterCheckbox.checked = false;
-    updateSelectionState();
-
-    try {
-        const response = await fetch(`${API_BASE}/rank-candidates`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jd: jdText })
-        });
-        
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || 'Failed to rank candidates');
-        }
-
-        const data = await response.json();
-        state.candidatesList = data.results;
-
-        renderCandidatesTable();
-        matchingSummary.innerText = `Matched ${data.count} candidates against the JD.`;
-        showToast('Ranking Complete', `Found and ranked ${data.count} candidates.`, 'success');
-    } catch (error) {
-        console.error('Error ranking candidates:', error);
-        showToast('Ranking Failed', error.message || 'Error scoring candidates.', 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// RENDER CANDIDATES TABLE
-function renderCandidatesTable() {
-    candidatesTbody.innerHTML = '';
-    
-    if (!state.candidatesList || state.candidatesList.length === 0) {
-        emptyState.style.display = 'flex';
-        const emptyTitle = emptyState.querySelector('h3');
-        const emptyDesc = emptyState.querySelector('p');
-        if (emptyTitle && emptyDesc) {
-            emptyTitle.innerText = "No candidates matched";
-            emptyDesc.innerText = "No candidates matched the job description criteria. Try adjusting the job description or uploading more resumes.";
-        }
-        candidatesContainer.style.display = 'none';
-        selectAllBtn.style.display = 'none';
-        return;
-    }
-
-    emptyState.style.display = 'none';
-    candidatesContainer.style.display = 'block';
-    selectAllBtn.style.display = 'inline-block';
-
-    state.candidatesList.forEach(cand => {
-        const name = cand.candidate_name;
-        const initial = name ? name.charAt(0).toUpperCase() : 'C';
-        const score = Math.round(cand.score * 100);
-        
-        let scoreClass = 'score-poor';
-        if (score >= 80) scoreClass = 'score-excellent';
-        else if (score >= 50) scoreClass = 'score-good';
-
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>
-                <input type="checkbox" class="cand-checkbox" data-name="${name}" ${state.selectedCandidates.has(name) ? 'checked' : ''}>
-            </td>
-            <td>
-                <div class="candidate-name-cell">
-                    <div class="avatar-placeholder">${initial}</div>
-                    <div>
-                        <span class="candidate-meta-name">${name}</span>
-                        <span class="candidate-meta-file">${cand.resume_filename || ''}</span>
-                    </div>
-                </div>
-            </td>
-            <td>${cand.current_role || 'Not Specified'}</td>
-            <td>
-                <span class="exp-badge">Calculating...</span>
-            </td>
-            <td style="text-align: right;">
-                <span class="score-badge ${scoreClass}">${score}% Semantic Match</span>
-            </td>
-            <td style="text-align: center;">
-                <button class="action-view-btn" data-name="${name}">
-                    <i class="fa-regular fa-folder-open"></i> Profile
-                </button>
-            </td>
-        `;
-
-        fetchCandidateSummaryDetails(name, row.querySelector('.exp-badge'));
-
-        // Register checkbox listener
-        row.querySelector('.cand-checkbox').addEventListener('change', (e) => {
-            if (e.target.checked) {
-                state.selectedCandidates.add(name);
-            } else {
-                state.selectedCandidates.delete(name);
-            }
-            updateMasterCheckboxState();
-            updateSelectionState();
-        });
-
-        // Register view profile listener
-        row.querySelector('.action-view-btn').addEventListener('click', () => {
-            viewCandidateProfile(name);
-        });
-
-        candidatesTbody.appendChild(row);
-    });
-}
-
-// FETCH EXPERIENCE DETAIL DYNAMICALLY
-async function fetchCandidateSummaryDetails(name, badgeEl) {
-    try {
-        const response = await fetch(`${API_BASE}/candidate/${encodeURIComponent(name)}`);
-        if (response.ok) {
-            const data = await response.json();
-            const y = data.years_of_experience || 0;
-            badgeEl.innerText = `${y} yr${y !== 1 ? 's' : ''} exp`;
-        } else {
-            badgeEl.innerText = 'N/A';
+        const res = await authedFetch(`${getApiBase()}/api/candidates/metadata`);
+        if (res.ok) {
+            apiMetadata = await res.json();
+            populateFilterOptions();
         }
     } catch (e) {
-        badgeEl.innerText = 'N/A';
+        console.error("Metadata load error:", e);
     }
 }
 
-// UPDATE SELECTION COUNT AND BUTTON STATES
-function updateSelectionState() {
-    const size = state.selectedCandidates.size;
-    statSelectedCount.innerText = size;
+function populateFilterOptions() {
+    // Pool filters
+    const poolRecSelect  = document.getElementById("filterPoolRecruiter");
+    const poolRoleSelect = document.getElementById("filterPoolRole");
+    const poolSkillSelect = document.getElementById("filterPoolSkill");
+    if (poolRecSelect && poolRecSelect.options.length <= 1)
+        apiMetadata.recruiters.forEach(rec => poolRecSelect.add(new Option(rec, rec)));
+    if (poolRoleSelect && poolRoleSelect.options.length <= 1)
+        apiMetadata.roles.forEach(r => poolRoleSelect.add(new Option(r, r)));
+    if (poolSkillSelect && poolSkillSelect.options.length <= 1)
+        apiMetadata.skills.forEach(s => poolSkillSelect.add(new Option(s, s)));
 
-    // Do NOT disable buttons on selection state changes so clicking can trigger toast warnings
-    compareBtn.removeAttribute('disabled');
-    generateCvsBtn.removeAttribute('disabled');
+    // AI search filters
+    const aiRoleSelect = document.getElementById("aiFilterRole");
+    const aiRecSelect  = document.getElementById("aiFilterRecruiter");
+    if (aiRoleSelect && aiRoleSelect.options.length <= 1)
+        apiMetadata.roles.forEach(r => aiRoleSelect.add(new Option(r, r)));
+    if (aiRecSelect && aiRecSelect.options.length <= 1)
+        apiMetadata.recruiters.forEach(rec => aiRecSelect.add(new Option(rec, rec)));
+
+    // NR JD dropdown
+    const nrJdSelect = document.getElementById("nrJdSelect");
+    if (nrJdSelect) fetchJdDropdown(nrJdSelect);
 }
 
-function updateMasterCheckboxState() {
-    const checkboxes = candidatesTbody.querySelectorAll('.cand-checkbox');
-    if (checkboxes.length === 0) {
-        masterCheckbox.checked = false;
+async function fetchJdDropdown(selectEl) {
+    if (!selectEl) return;
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions`);
+        if (res.ok) {
+            const jds = await res.json();
+            selectEl.innerHTML = '<option value="">-- Choose a saved Job Description --</option>';
+            jds.forEach(jd => selectEl.add(new Option(jd.title, jd.jd_id)));
+        }
+    } catch (e) { console.error("JD dropdown error", e); }
+}
+
+// ═══════════════════════════════════════════════════════
+//  DASHBOARD
+// ═══════════════════════════════════════════════════════
+
+async function loadDashboardStats() {
+    try {
+        const [resTotal, resMy, resJds, resCvs] = await Promise.all([
+            authedFetch(`${getApiBase()}/api/candidates?global_pool=true&limit=1`).catch(() => null),
+            authedFetch(`${getApiBase()}/api/candidates?global_pool=false&limit=1`).catch(() => null),
+            authedFetch(`${getApiBase()}/api/job-descriptions`).catch(() => null),
+            authedFetch(`${getApiBase()}/api/generated-cvs`).catch(() => null)
+        ]);
+
+        const el = (id) => document.getElementById(id);
+
+        if (resTotal && resTotal.ok) {
+            const data = await resTotal.json();
+            if (el("statTotalCandidates")) el("statTotalCandidates").textContent = data.total ?? (Array.isArray(data) ? data.length : 0);
+        }
+        if (resMy && resMy.ok) {
+            const data = await resMy.json();
+            if (el("statMyCandidates")) el("statMyCandidates").textContent = data.total ?? (Array.isArray(data) ? data.length : 0);
+        }
+        if (resJds && resJds.ok) {
+            const data = await resJds.json();
+            if (el("statActiveJds")) el("statActiveJds").textContent = data.length;
+        }
+        if (resCvs && resCvs.ok) {
+            const data = await resCvs.json();
+            if (el("statGeneratedCvs")) el("statGeneratedCvs").textContent = data.length;
+        }
+    } catch (e) {
+        console.error("Dashboard stats error:", e);
+    }
+}
+
+// ─── Template ───────────────────────────────────────────
+
+async function checkActiveTemplate() {
+    try {
+        const res = await authedFetch(`${getApiBase()}/active-template`);
+        if (res.ok) {
+            const data = await res.json();
+            if (data.template_name) {
+                document.getElementById("activeTemplateDisplay").hidden = false;
+                document.getElementById("activeTemplateName").textContent = data.template_name;
+                const dropzone = document.getElementById("templateDropzone");
+                if (dropzone) dropzone.style.display = "none";
+            } else {
+                document.getElementById("activeTemplateDisplay").hidden = true;
+                const dropzone = document.getElementById("templateDropzone");
+                if (dropzone) dropzone.style.display = "";
+            }
+        }
+    } catch (e) { console.error("Template check error:", e); }
+}
+
+function setupTemplateDropzone() {
+    const dropzone   = document.getElementById("templateDropzone");
+    const fileInput  = document.getElementById("templateFileInput");
+    const removeBtn  = document.getElementById("removeTemplateBtn");
+
+    if (!dropzone || !fileInput) return;
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => {
+        if (e.target.files.length > 0) uploadTemplate(e.target.files[0]);
+    });
+
+    ["dragenter","dragover","dragleave","drop"].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); });
+    });
+    dropzone.addEventListener("dragover",  () => dropzone.classList.add("drag-over"));
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+    dropzone.addEventListener("drop", (e) => {
+        dropzone.classList.remove("drag-over");
+        if (e.dataTransfer.files.length > 0) uploadTemplate(e.dataTransfer.files[0]);
+    });
+
+    if (removeBtn) removeBtn.addEventListener("click", async () => {
+        try {
+            await authedFetch(`${getApiBase()}/active-template`, { method: "DELETE" });
+            document.getElementById("activeTemplateDisplay").hidden = true;
+            if (dropzone) dropzone.style.display = "";
+            showMessage("Template removed.", "info");
+        } catch (e) { showMessage("Failed to remove template.", "error"); }
+    });
+}
+
+async function uploadTemplate(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+        const res = await authedFetch(`${getApiBase()}/upload-template`, { method: "POST", body: formData });
+        if (!res.ok) throw new Error("Upload failed");
+        showMessage("CV template uploaded successfully.", "success");
+        await checkActiveTemplate();
+    } catch (e) { showMessage(`Template upload failed: ${e.message}`, "error"); }
+}
+
+// ═══════════════════════════════════════════════════════
+//  NEW RECRUITMENT — 6-STEP WORKFLOW
+// ═══════════════════════════════════════════════════════
+
+function setupNewRecruitment() {
+    if (_nrSetupDone) return;
+    _nrSetupDone = true;
+
+    // Dropzone
+    setupNrDropzone();
+
+    // Source checkbox interactions
+    const includePool = document.getElementById("nrIncludePool");
+    const onlyNew     = document.getElementById("nrOnlyNew");
+    const subOptions  = document.getElementById("nrPoolSubOptions");
+
+    if (includePool) includePool.addEventListener("change", () => {
+        if (subOptions) subOptions.style.display = includePool.checked ? "" : "none";
+        if (onlyNew && includePool.checked) onlyNew.checked = false;
+    });
+
+    if (onlyNew) onlyNew.addEventListener("change", () => {
+        if (onlyNew.checked && includePool) {
+            includePool.checked = false;
+            if (subOptions) subOptions.style.display = "none";
+        }
+    });
+
+    // Upload button
+    const uploadBtn = document.getElementById("nrUploadBtn");
+    if (uploadBtn) uploadBtn.addEventListener("click", nrDoUpload);
+
+    // JD file extraction
+    const extractBtn = document.getElementById("nrExtractJdBtn");
+    if (extractBtn) extractBtn.addEventListener("click", nrExtractJdFile);
+
+    // JD select auto-fill
+    const nrJdSelect = document.getElementById("nrJdSelect");
+    if (nrJdSelect) {
+        fetchJdDropdown(nrJdSelect);
+        nrJdSelect.addEventListener("change", async () => {
+            const val = nrJdSelect.value;
+            if (!val) { document.getElementById("nrJdText").value = ""; return; }
+            try {
+                const res = await authedFetch(`${getApiBase()}/api/job-descriptions/${val}`);
+                if (res.ok) {
+                    const jd = await res.json();
+                    document.getElementById("nrJdText").value = jd.description || "";
+                }
+            } catch (e) {}
+        });
+    }
+
+    // Rank button
+    const rankBtn = document.getElementById("nrRankBtn");
+    if (rankBtn) rankBtn.addEventListener("click", nrRunRanking);
+
+    // Check all for ranked results
+    const checkAll = document.getElementById("nrCheckAll");
+    if (checkAll) checkAll.addEventListener("change", (e) => {
+        document.querySelectorAll(".nr-rank-check").forEach(cb => {
+            cb.checked = e.target.checked;
+            const name = cb.dataset.name;
+            if (e.target.checked) nrSelectedCandidates.add(name);
+            else nrSelectedCandidates.delete(name);
+        });
+        updateNrSelectionActions();
+    });
+
+    // Compare & Generate buttons
+    const compareBtn = document.getElementById("nrCompareBtn");
+    if (compareBtn) compareBtn.addEventListener("click", () => {
+        triggerCandidatesComparison(nrSelectedCandidates, document.getElementById("nrJdText")?.value || "");
+    });
+
+    const generateBtn = document.getElementById("nrGenerateBtn");
+    if (generateBtn) generateBtn.addEventListener("click", nrDoGenerateCVs);
+
+    // Reset
+    const resetBtn = document.getElementById("nrResetBtn");
+    if (resetBtn) resetBtn.addEventListener("click", nrReset);
+
+    const startOverBtn = document.getElementById("nrStartOverBtn");
+    if (startOverBtn) startOverBtn.addEventListener("click", nrReset);
+}
+
+// ─── Dropzone setup ────────────────────────────────────
+
+let nrQueuedFiles = [];
+
+function setupNrDropzone() {
+    const dropzone  = document.getElementById("nrDropzone");
+    const fileInput = document.getElementById("nrFileInput");
+    const uploadBtn = document.getElementById("nrUploadBtn");
+    if (!dropzone || !fileInput) return;
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => {
+        nrAddFiles(Array.from(e.target.files));
+        fileInput.value = "";
+    });
+
+    ["dragenter","dragover","dragleave","drop"].forEach(ev => {
+        dropzone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); });
+    });
+    dropzone.addEventListener("dragover",  () => dropzone.classList.add("drag-over"));
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+    dropzone.addEventListener("drop", (e) => {
+        dropzone.classList.remove("drag-over");
+        nrAddFiles(Array.from(e.dataTransfer.files));
+    });
+}
+
+function nrAddFiles(files) {
+    const valid   = files.filter(f => /\.(pdf|docx)$/i.test(f.name));
+    const invalid = files.filter(f => !/\.(pdf|docx)$/i.test(f.name));
+
+    if (invalid.length) showMessage(`Rejected ${invalid.length} file(s) — only PDF/DOCX allowed.`, "error");
+
+    valid.forEach(f => {
+        if (!nrQueuedFiles.find(q => q.name === f.name)) nrQueuedFiles.push(f);
+    });
+
+    nrRenderFileList();
+
+    const uploadBtn = document.getElementById("nrUploadBtn");
+    const hint      = document.getElementById("nrUploadHint");
+    if (uploadBtn) uploadBtn.disabled = nrQueuedFiles.length === 0;
+    if (hint) hint.textContent = nrQueuedFiles.length > 0
+        ? `${nrQueuedFiles.length} file(s) ready to upload`
+        : "Select at least one resume file to continue";
+}
+
+function nrRenderFileList() {
+    const list = document.getElementById("nrFileList");
+    if (!list) return;
+    if (nrQueuedFiles.length === 0) { list.style.display = "none"; list.innerHTML = ""; return; }
+
+    list.style.display = "flex";
+    list.innerHTML = nrQueuedFiles.map((f, i) => `
+        <div class="nr-file-item" id="nrFile-${i}">
+            <span>📄</span>
+            <span class="nr-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+            <span class="nr-file-status"><span class="skill-tag">Ready</span></span>
+            <button type="button" class="remove-btn" onclick="nrRemoveFile(${i})" title="Remove">×</button>
+        </div>
+    `).join("");
+}
+
+function nrRemoveFile(idx) {
+    nrQueuedFiles.splice(idx, 1);
+    nrRenderFileList();
+    const uploadBtn = document.getElementById("nrUploadBtn");
+    if (uploadBtn) uploadBtn.disabled = nrQueuedFiles.length === 0;
+}
+
+// ─── Upload & Processing ───────────────────────────────
+
+async function nrDoUpload() {
+    if (nrQueuedFiles.length === 0) { showMessage("Please select resume files first.", "error"); return; }
+
+    const uploadBtn = document.getElementById("nrUploadBtn");
+    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.textContent = "Uploading..."; }
+
+    // Show step 2
+    nrShowStep(2);
+    nrSetChecklist("running", "running", "pending", "pending", "pending");
+
+    // Progress bar elements
+    const progressContainer = document.getElementById("nrUploadProgressContainer");
+    const progressBarFill = document.getElementById("nrUploadProgressBarFill");
+    const progressPercent = document.getElementById("nrUploadProgressPercent");
+    if (progressContainer) progressContainer.style.display = "block";
+    if (progressBarFill) progressBarFill.style.width = "0%";
+    if (progressPercent) progressPercent.textContent = "0%";
+
+    let uploadProgress = 0;
+    const progressInterval = setInterval(() => {
+        if (uploadProgress < 90) {
+            uploadProgress += Math.floor(Math.random() * 10) + 5;
+            uploadProgress = Math.min(uploadProgress, 90);
+            if (progressBarFill) progressBarFill.style.width = `${uploadProgress}%`;
+            if (progressPercent) progressPercent.textContent = `${uploadProgress}%`;
+        }
+    }, 150);
+
+    const tStart = performance.now();
+    const formData = new FormData();
+    nrQueuedFiles.forEach(f => formData.append("files", f));
+
+    try {
+        // Mark upload
+        nrSetChecklistItem("chk-upload", "running", "Uploading files...");
+
+        const res = await authedFetch(`${getApiBase()}/upload-resumes`, { method: "POST", body: formData });
+
+        clearInterval(progressInterval);
+        if (progressBarFill) progressBarFill.style.width = "100%";
+        if (progressPercent) progressPercent.textContent = "100%";
+        setTimeout(() => { if (progressContainer) progressContainer.style.display = "none"; }, 800);
+
+        nrSetChecklistItem("chk-upload", "done", "Files uploaded");
+        nrSetChecklistItem("chk-dup",    "done", "Duplicate detection complete");
+        nrSetChecklistItem("chk-parse",  "done", "Parsing complete via OpenAI");
+        nrSetChecklistItem("chk-embed",  "done", "Embeddings generated & indexed");
+        nrSetChecklistItem("chk-save",   "done", "Candidates saved to database");
+
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+
+        const parsed = data.uploaded || [];
+        const failed = data.failed  || [];
+        const dupes  = (nrQueuedFiles.length) - parsed.length - failed.length;
+        const tElapsed = ((performance.now() - tStart) / 1000).toFixed(1);
+
+        // Store uploaded names for ranking
+        nrUploadedNames = parsed.map(u => u.candidate_name).filter(Boolean);
+
+        // Show summary
+        const uploadedEl = document.getElementById("procStatUploaded");
+        if (uploadedEl) uploadedEl.textContent = nrQueuedFiles.length;
+        document.getElementById("procStatParsed").textContent = parsed.length;
+        document.getElementById("procStatDupes").textContent  = Math.max(0, dupes);
+        document.getElementById("procStatFailed").textContent = failed.length;
+        const timeEl = document.getElementById("procStatTime");
+        if (timeEl) timeEl.textContent = `${tElapsed}s`;
+        document.getElementById("nrProcessingSummary").style.display = "flex";
+
+        // List parsed
+        if (parsed.length > 0) {
+            const pl = document.getElementById("nrParsedList");
+            pl.style.display = "block";
+            pl.innerHTML = `
+                <div class="source-selection-card" style="margin-top:0;">
+                    <h3 class="source-title">✅ Parsed Candidates</h3>
+                    <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
+                        ${parsed.map(u => `
+                            <div style="display:flex; align-items:center; gap:10px; font-size:12.5px;">
+                                <span style="color:var(--success-strong);">✓</span>
+                                <strong>${escapeHtml(u.candidate_name)}</strong>
+                                <span style="color:var(--muted);">(${escapeHtml(u.filename)})</span>
+                            </div>
+                        `).join("")}
+                    </div>
+                </div>`;
+        }
+
+        // Mark connectors
+        nrMarkConnector(1, true);
+        nrMarkConnector(2, true);
+        nrSetStepIndicator(3, "active");
+        nrSetStepIndicator(2, "done");
+        nrSetStepIndicator(1, "done");
+
+        // Reveal step 3 after short delay
+        setTimeout(() => nrShowStep(3), 600);
+
+        await loadDashboardStats();
+
+    } catch (e) {
+        nrSetChecklistItem("chk-upload", "error", `Upload failed: ${e.message}`);
+        showMessage(`Upload failed: ${e.message}`, "error");
+        if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.textContent = "Upload & Parse Resumes"; }
+    }
+}
+
+function nrSetChecklistItem(id, state, desc) {
+    const item    = document.getElementById(id);
+    if (!item) return;
+    const iconEl  = item.querySelector(".chk-icon");
+    const descEl  = item.querySelector(".chk-desc");
+    if (iconEl) iconEl.textContent = state === "done" ? "✓" : state === "error" ? "✗" : state === "running" ? "⟳" : "⏳";
+    item.className = `checklist-item ${state === "pending" ? "" : state}`;
+    if (descEl && desc) descEl.textContent = desc;
+}
+
+function nrSetChecklist(s1, s2, s3, s4, s5) {
+    nrSetChecklistItem("chk-upload", s1, null);
+    nrSetChecklistItem("chk-dup",    s2, null);
+    nrSetChecklistItem("chk-parse",  s3, null);
+    nrSetChecklistItem("chk-embed",  s4, null);
+    nrSetChecklistItem("chk-save",   s5, null);
+}
+
+// ─── JD Extraction ────────────────────────────────────
+
+async function nrExtractJdFile() {
+    const fileInput = document.getElementById("nrJdFile");
+    if (!fileInput || !fileInput.files.length) {
+        showMessage("Please select a PDF or DOCX file first.", "error");
         return;
     }
-    const allChecked = Array.from(checkboxes).every(cb => cb.checked);
-    masterCheckbox.checked = allChecked;
-}
+    const btn = document.getElementById("nrExtractJdBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Extracting..."; }
 
-// API: VIEW CANDIDATE PROFILE DETAILS
-async function viewCandidateProfile(name) {
-    showLoading(`Loading ${name}'s profile...`);
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+
     try {
-        const response = await fetch(`${API_BASE}/candidate/${encodeURIComponent(name)}`);
-        if (!response.ok) throw new Error('Candidate details not found');
-        const data = await response.json();
-        
-        // Populate modal details
-        modalCandidateAvatar.innerText = name.charAt(0).toUpperCase();
-        modalCandidateName.innerText = data.candidate_name || name;
-        modalCandidateRole.innerText = data.current_role || 'Not Specified';
-
-        renderProfileDetails(data);
-        
-        // Show modal
-        candidateModal.classList.add('active');
-    } catch (error) {
-        console.error('Error loading candidate detail:', error);
-        showToast('Profile Load Error', 'Error loading candidate profile details.', 'error');
+        const res = await authedFetch(`${getApiBase()}/extract-jd-text`, { method: "POST", body: formData });
+        if (!res.ok) throw new Error("Extraction failed");
+        const data = await res.json();
+        const textarea = document.getElementById("nrJdText");
+        if (textarea && data.text) textarea.value = data.text;
+        showMessage("JD text extracted successfully.", "success");
+    } catch (e) {
+        showMessage(`JD extraction failed: ${e.message}`, "error");
     } finally {
-        hideLoading();
+        if (btn) { btn.disabled = false; btn.textContent = "Extract Text"; }
     }
 }
 
-// RENDER PROFILE IN MODAL
-function renderProfileDetails(data) {
-    let html = '';
+// ─── Ranking ─────────────────────────────────────────
 
-    // Summary stats
-    html += `
-        <div class="profile-section">
-            <h3>Overview</h3>
-            <div class="profile-grid-2">
-                <div class="profile-item">
-                    <label>Years of Experience</label>
-                    <span>${data.years_of_experience || 0} Years</span>
+async function nrRunRanking() {
+    const jdText = (document.getElementById("nrJdText")?.value || "").trim();
+    if (!jdText) { showMessage("Please enter a Job Description to rank candidates.", "error"); return; }
+
+    // Determine candidate source
+    const includePool = document.getElementById("nrIncludePool")?.checked;
+    const onlyNew     = document.getElementById("nrOnlyNew")?.checked;
+    const scopeAll    = document.getElementById("nrScopeAll")?.checked;
+
+    let payload = { jd: jdText, global_pool: true };
+
+    if (onlyNew) {
+        // Only score newly uploaded
+        if (nrUploadedNames.length === 0) {
+            showMessage("No newly uploaded candidates to rank. Either upload resumes or include the pool.", "error");
+            return;
+        }
+        payload.global_pool = false;
+        payload.candidate_names = nrUploadedNames;
+    } else if (includePool) {
+        // Pool + newly uploaded
+        payload.global_pool = !scopeAll ? false : true;
+        if (!scopeAll) payload.scope = "my";
+        // Include newly uploaded names if any
+        if (nrUploadedNames.length > 0) payload.include_names = nrUploadedNames;
+    }
+
+    const btn = document.getElementById("nrRankBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Ranking..."; }
+
+    // Show step 4
+    nrShowStep(4);
+    const body = document.getElementById("nrRankBody");
+    if (body) body.innerHTML = `<tr><td colspan="11" class="empty-state"><div class="spinner" style="margin:0 auto 8px;"></div>Ranking candidates with FAISS semantic matching...</td></tr>`;
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/rank-candidates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) throw new Error(await res.text() || "Ranking failed");
+        const rawData = await res.json();
+        const results = Array.isArray(rawData) ? rawData : (rawData.results || []);
+
+        nrSelectedCandidates.clear();
+        nrRenderRankedResults(results);
+
+        nrMarkConnector(2, true);
+        nrMarkConnector(3, true);
+        nrSetStepIndicator(3, "done");
+        nrSetStepIndicator(4, "active");
+
+        document.getElementById("nrRankCount").textContent = `(${results.length})`;
+
+        const actions = document.getElementById("nrRankSelectionActions");
+        if (actions) actions.hidden = false;
+
+    } catch (e) {
+        if (body) body.innerHTML = `<tr><td colspan="11" class="empty-state error-text">Ranking failed: ${escapeHtml(e.message)}</td></tr>`;
+        showMessage(`Ranking failed: ${e.message}`, "error");
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "Rank Candidates ›"; }
+    }
+}
+
+function nrRenderRankedResults(results) {
+    const body = document.getElementById("nrRankBody");
+    if (!body) return;
+
+    if (!results || results.length === 0) {
+        body.innerHTML = `<tr><td colspan="11" class="empty-state">No matching candidates found. Try adjusting the job description or candidate source.</td></tr>`;
+        return;
+    }
+
+    body.innerHTML = "";
+    results.forEach((r, idx) => {
+        const score     = Math.round(r.match_score ?? r.score ?? 0);
+        const scoreClass = score >= 75 ? "high" : score >= 45 ? "medium" : "low";
+        const isNew     = nrUploadedNames.includes(r.candidate_name);
+        const badge     = isNew
+            ? `<span class="badge-new">NEW</span>`
+            : `<span class="badge-existing">EXISTING</span>`;
+        const mTags  = (r.matching_skills || []).map(s => `<span class="matching-skill-tag">${escapeHtml(s)}</span>`).join("");
+        const msTags = (r.missing_skills  || []).map(s => `<span class="missing-skill-tag">${escapeHtml(s)}</span>`).join("");
+        const summary = r.search_profile || "—";
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td class="checkbox-col">
+                <input type="checkbox" class="nr-rank-check" data-name="${escapeHtml(r.candidate_name)}">
+            </td>
+            <td class="candidate-name-cell" onclick="viewCandidateProfile('${escapeHtml(r.candidate_name)}')">${escapeHtml(r.candidate_name)}</td>
+            <td class="role-text">${escapeHtml(r.current_role || "Unknown")}</td>
+            <td>${r.years_of_experience} yrs</td>
+            <td class="score-badge-col"><span class="score-badge ${scoreClass}">${score}%</span></td>
+            <td>${badge}</td>
+            <td>${escapeHtml(r.uploaded_by || "—")}</td>
+            <td>${mTags  || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
+            <td>${msTags || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
+            <td>
+                <div style="max-height: 48px; overflow-y: auto; font-size: 11.5px; line-height: 1.4; color: var(--text-secondary); max-width: 240px;" title="${escapeHtml(summary)}">
+                    ${escapeHtml(summary)}
                 </div>
-                <div class="profile-item">
-                    <label>Profile Match Term</label>
-                    <span>${data.resume_filename || 'Parsed Raw Resume'}</span>
+            </td>
+            <td>
+                <div class="actions-cell-wrap" style="display:flex; gap:6px;">
+                    <button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(r.candidate_name)}')">Profile</button>
+                    <button type="button" class="btn btn-secondary compact-btn" onclick="triggerSingleCandidateComparison('${escapeHtml(r.candidate_name)}')">Compare</button>
+                    <button type="button" class="btn btn-primary compact-btn" onclick="triggerSingleCandidateCv('${escapeHtml(r.candidate_name)}')">Generate CV</button>
                 </div>
+            </td>`;
+        body.appendChild(tr);
+
+        tr.querySelector(".nr-rank-check").addEventListener("change", (e) => {
+            if (e.target.checked) nrSelectedCandidates.add(r.candidate_name);
+            else nrSelectedCandidates.delete(r.candidate_name);
+            updateNrSelectionActions();
+        });
+    });
+}
+
+function updateNrSelectionActions() {
+    const count = nrSelectedCandidates.size;
+    const compareBtn  = document.getElementById("nrCompareBtn");
+    const generateBtn = document.getElementById("nrGenerateBtn");
+    if (compareBtn)  compareBtn.disabled  = count < 2;
+    if (generateBtn) generateBtn.disabled = count === 0;
+}
+
+// ─── CV Generation ────────────────────────────────────
+
+async function nrDoGenerateCVs() {
+    const names  = Array.from(nrSelectedCandidates);
+    const jdText = (document.getElementById("nrJdText")?.value || "").trim();
+
+    if (names.length === 0) { showMessage("Select at least one candidate.", "error"); return; }
+
+    // Show step 5
+    nrShowStep(5);
+    nrMarkConnector(3, true);
+    nrMarkConnector(4, true);
+    nrSetStepIndicator(4, "done");
+    nrSetStepIndicator(5, "active");
+
+    const countEl  = document.getElementById("nrGenerateCount");
+    const progress = document.getElementById("nrGenerateProgress");
+    const result   = document.getElementById("nrGenerateResult");
+
+    if (countEl)  countEl.textContent = names.length;
+    if (progress) progress.style.display = "flex";
+    if (result)   result.style.display = "none";
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/generate-selected-cvs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidate_names: names, jd: jdText || "General Professional Profile" })
+        });
+
+        if (!res.ok) throw new Error(await res.text() || "Generation failed");
+
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+
+        if (progress) progress.style.display = "none";
+        if (result)   result.style.display   = "block";
+
+        const link = document.getElementById("nrDownloadLink");
+        if (link) {
+            link.href = url;
+            link.download = `CVs_${names.join("_").substring(0, 40)}_${new Date().toISOString().slice(0,10)}.zip`;
+        }
+
+        const descEl = document.getElementById("nrGenerateResultDesc");
+        if (descEl) descEl.textContent = `${names.length} CV(s) generated. Your download should begin automatically.`;
+
+        link?.click();
+        await fetchGeneratedCvs();
+
+    } catch (e) {
+        if (progress) progress.style.display = "none";
+        showMessage(`CV generation failed: ${e.message}`, "error");
+    }
+}
+
+// ─── Step Navigation Helpers ──────────────────────────
+
+function nrShowStep(stepNumber) {
+    // Show all steps up to and including stepNumber
+    for (let i = 1; i <= 5; i++) {
+        const el = document.getElementById(`nrStep${i}`);
+        if (el) el.style.display = i <= stepNumber ? "" : "none";
+    }
+    // Scroll to the new step
+    const el = document.getElementById(`nrStep${stepNumber}`);
+    if (el) setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+}
+
+function nrSetStepIndicator(step, state) {
+    const el = document.getElementById(`nrStep${step}Indicator`);
+    if (!el) return;
+    el.className = `step-item ${state}`;
+    const circle = el.querySelector(".step-circle");
+    if (circle && state === "done") circle.textContent = "✓";
+}
+
+function nrMarkConnector(num, done) {
+    const el = document.getElementById(`nrConn${num}`);
+    if (el) el.classList.toggle("done", done);
+}
+
+function nrReset() {
+    // Reset state
+    nrQueuedFiles = [];
+    nrUploadedNames = [];
+    nrSelectedCandidates.clear();
+
+    // Reset UI
+    nrRenderFileList();
+    for (let i = 1; i <= 5; i++) {
+        const el = document.getElementById(`nrStep${i}`);
+        if (el) el.style.display = i === 1 ? "" : "none";
+    }
+    for (let i = 1; i <= 5; i++) {
+        const ind = document.getElementById(`nrStep${i}Indicator`);
+        if (ind) { ind.className = `step-item${i === 1 ? " active" : ""}`; const c = ind.querySelector(".step-circle"); if (c) c.textContent = i; }
+    }
+    for (let i = 1; i <= 4; i++) nrMarkConnector(i, false);
+
+    // Reset checkboxes
+    const incPool = document.getElementById("nrIncludePool");
+    if (incPool) incPool.checked = true;
+    const onlyNew = document.getElementById("nrOnlyNew");
+    if (onlyNew) onlyNew.checked = false;
+    const scopeAll = document.getElementById("nrScopeAll");
+    if (scopeAll) scopeAll.checked = true;
+    const subOpts = document.getElementById("nrPoolSubOptions");
+    if (subOpts) subOpts.style.display = "";
+
+    const progressContainer = document.getElementById("nrUploadProgressContainer");
+    if (progressContainer) progressContainer.style.display = "none";
+
+    // Reset inputs
+    const els = ["nrJdText"];
+    els.forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+
+    const rankBody = document.getElementById("nrRankBody");
+    if (rankBody) rankBody.innerHTML = `<tr><td colspan="11" class="empty-state">Run ranking above to see results.</td></tr>`;
+
+    const rankCount = document.getElementById("nrRankCount");
+    if (rankCount) rankCount.textContent = "";
+
+    const uploadBtn = document.getElementById("nrUploadBtn");
+    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.textContent = "Upload & Parse Resumes"; }
+
+    const hint = document.getElementById("nrUploadHint");
+    if (hint) hint.textContent = "Select at least one resume file to continue";
+
+    const summary = document.getElementById("nrProcessingSummary");
+    if (summary) summary.style.display = "none";
+    const parsedList = document.getElementById("nrParsedList");
+    if (parsedList) { parsedList.style.display = "none"; parsedList.innerHTML = ""; }
+
+    const genResult = document.getElementById("nrGenerateResult");
+    if (genResult) genResult.style.display = "none";
+    const genProgress = document.getElementById("nrGenerateProgress");
+    if (genProgress) genProgress.style.display = "none";
+
+    updateNrSelectionActions();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+//  CANDIDATE POOL (BROWSE + SEMANTIC SEARCH + PAGINATION)
+// ═══════════════════════════════════════════════════════
+
+// Pool state tracks mode (browse | search), current page, total, and query
+const poolState = {
+    mode:  "browse",   // "browse" | "search"
+    page:  1,
+    limit: 20,
+    total: 0,
+    query: ""
+};
+
+function showToast(message) {
+    let toast = document.getElementById("toast-notification");
+    if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "toast-notification";
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.className = "toast-show";
+    setTimeout(() => { if (toast.className === "toast-show") toast.className = ""; }, 3000);
+}
+
+async function copyJobDescription(jdId) {
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions/${jdId}`);
+        if (!res.ok) throw new Error("Could not fetch JD");
+        const jd = await res.json();
+        await navigator.clipboard.writeText(jd.description || "");
+        showToast("Job Description copied.");
+    } catch (e) {
+        showMessage(`Failed to copy JD: ${e.message}`, "error");
+    }
+}
+
+function setupCandidatePoolPage() {
+    if (_poolSetupDone) return;
+    _poolSetupDone = true;
+
+    const searchBtn   = document.getElementById("poolSearchBtn");
+    const clearBtn    = document.getElementById("poolClearSearchBtn");
+    const compareBtn  = document.getElementById("poolCompareBtn");
+    const genBtn      = document.getElementById("poolGenerateCvsBtn");
+    const searchInput = document.getElementById("poolSearchInput");
+    const prevBtn     = document.getElementById("poolPrevBtn");
+    const nextBtn     = document.getElementById("poolNextBtn");
+
+    if (searchBtn) searchBtn.addEventListener("click", () => runPoolSemanticSearch(1));
+    if (searchInput) {
+        searchInput.addEventListener("keydown", e => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPoolSemanticSearch(1); }
+        });
+    }
+    if (clearBtn)  clearBtn.addEventListener("click", clearPoolSearch);
+    if (prevBtn)   prevBtn.addEventListener("click",  () => loadPoolPage(poolState.page - 1));
+    if (nextBtn)   nextBtn.addEventListener("click",  () => loadPoolPage(poolState.page + 1));
+
+    if (compareBtn) compareBtn.addEventListener("click", () => triggerCandidatesComparison(poolSelectedCompareCandidates, activePoolQuery));
+    if (genBtn) genBtn.addEventListener("click", async () => { await triggerCVsZipDownload(Array.from(poolSelectedGenerateCandidates), activePoolQuery, genBtn); });
+
+    setupPoolSelectAllListeners();
+
+    // Load default candidate list immediately
+    loadPoolCandidates(1);
+}
+
+// Navigate to page (respects current mode)
+function loadPoolPage(page) {
+    if (poolState.mode === "search") {
+        runPoolSemanticSearch(page);
+    } else {
+        loadPoolCandidates(page);
+    }
+}
+
+// Browse mode: load all candidates paginated by upload date desc
+async function loadPoolCandidates(page = 1) {
+    poolState.mode = "browse";
+    poolState.page = page;
+    poolSelectedCompareCandidates.clear();
+    poolSelectedGenerateCandidates.clear();
+    activePoolQuery = "";
+    updatePoolSelectionActions();
+
+    const body = document.getElementById("poolTableBody");
+    if (body) body.innerHTML = `<tr><td colspan="11" class="empty-state"><div class="spinner" style="margin:0 auto 8px;"></div>Loading candidates...</td></tr>`;
+
+    const scoreHeader   = document.getElementById("poolScoreHeader");
+    const missingHeader = document.getElementById("poolMissingHeader");
+    if (scoreHeader)   scoreHeader.textContent = "Top Skills";
+    if (missingHeader) missingHeader.style.display = "";
+
+    try {
+        const params = new URLSearchParams({
+            global_pool: "true",
+            sort_by: "created_at",
+            sort_order: "desc",
+            page,
+            limit: poolState.limit
+        });
+        const res = await authedFetch(`${getApiBase()}/api/candidates?${params}`);
+        if (!res.ok) throw new Error("Could not load candidates");
+        const data = await res.json();
+
+        poolState.total = data.total || 0;
+        poolState.page  = data.page  || page;
+
+        const countBadge = document.getElementById("poolResultCount");
+        if (countBadge) countBadge.textContent = poolState.total > 0 ? `(${poolState.total})` : "";
+
+        renderPoolBrowseResults(data.results || []);
+        renderPoolPagination();
+
+    } catch (e) {
+        if (body) body.innerHTML = `<tr><td colspan="11" class="empty-state error-text">Error: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+// Render default (browse mode) rows — no match score
+function renderPoolBrowseResults(results) {
+    const body    = document.getElementById("poolTableBody");
+    const actions = document.getElementById("poolSelectionActions");
+    if (!body) return;
+
+    if (!results || results.length === 0) {
+        body.innerHTML = `<tr><td colspan="11" class="empty-state">No candidates found. Upload resumes to get started.</td></tr>`;
+        if (actions) actions.hidden = true;
+        renderPoolPagination();
+        return;
+    }
+
+    if (actions) actions.hidden = false;
+    body.innerHTML = "";
+
+    const offset = (poolState.page - 1) * poolState.limit;
+    results.forEach((c, idx) => {
+        const skillTags = (c.skills || []).slice(0, 5).map(s => `<span class="skill-tag" style="font-size:11px;">${escapeHtml(s)}</span>`).join("");
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td style="text-align:center; color:var(--text-muted); font-size:12px;">${offset + idx + 1}</td>
+            <td class="candidate-name-cell" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">${escapeHtml(c.candidate_name)}</td>
+            <td class="role-text">${escapeHtml(c.current_role || "—")}</td>
+            <td>${c.years_of_experience ?? "—"} yrs</td>
+            <td>${escapeHtml(c.uploaded_by || "—")}</td>
+            <td><span style="color:var(--text-muted); font-size:12px;">—</span></td>
+            <td>${skillTags || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
+            <td><span style="color:var(--text-muted); font-size:12px;">—</span></td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-compare-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-compare-check-b-${idx}"></td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-generate-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-generate-check-b-${idx}"></td>
+            <td style="text-align:center;"><button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">Preview</button></td>`;
+        body.appendChild(tr);
+
+        tr.querySelector(".pool-compare-check").addEventListener("change", e => {
+            if (e.target.checked) poolSelectedCompareCandidates.add(c.candidate_name);
+            else poolSelectedCompareCandidates.delete(c.candidate_name);
+            updatePoolSelectionActions();
+        });
+        tr.querySelector(".pool-generate-check").addEventListener("change", e => {
+            if (e.target.checked) poolSelectedGenerateCandidates.add(c.candidate_name);
+            else poolSelectedGenerateCandidates.delete(c.candidate_name);
+            updatePoolSelectionActions();
+        });
+    });
+}
+
+// Run semantic search and render ranked results with "Why Matched" rows
+async function runPoolSemanticSearch(page = 1) {
+    const query = (document.getElementById("poolSearchInput")?.value || "").trim();
+    if (!query) {
+        showMessage("Please enter a search query or paste a Job Description.", "error");
+        return;
+    }
+
+    poolState.mode  = "search";
+    poolState.page  = page;
+    poolState.query = query;
+    activePoolQuery = query;
+
+    poolSelectedCompareCandidates.clear();
+    poolSelectedGenerateCandidates.clear();
+    const allCompare = document.getElementById("poolCheckAllCompare");
+    if (allCompare) allCompare.checked = false;
+    const allGen = document.getElementById("poolCheckAllGenerate");
+    if (allGen) allGen.checked = false;
+    updatePoolSelectionActions();
+
+    const btn  = document.getElementById("poolSearchBtn");
+    const body = document.getElementById("poolTableBody");
+    if (btn)  { btn.disabled = true; btn.innerHTML = `<span class="ai-search-btn-icon">⏳</span> Searching...`; }
+    if (body) body.innerHTML = `<tr><td colspan="11" class="empty-state"><div class="spinner" style="margin:0 auto 8px;"></div>Searching candidate embeddings...</td></tr>`;
+
+    const scoreHeader   = document.getElementById("poolScoreHeader");
+    const missingHeader = document.getElementById("poolMissingHeader");
+    if (scoreHeader)   scoreHeader.textContent = "Match Score";
+    if (missingHeader) missingHeader.style.display = "";
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/candidates/semantic-search`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query, min_score: 0.1, page, limit: poolState.limit })
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || "Search failed"); }
+
+        const data = await res.json();
+        poolState.total = data.total || 0;
+        poolState.page  = data.page  || page;
+
+        const countBadge = document.getElementById("poolResultCount");
+        if (countBadge) countBadge.textContent = poolState.total > 0 ? `(${poolState.total})` : "";
+
+        renderPoolSemanticSearchResults(data.results || []);
+        renderPoolPagination();
+
+    } catch (e) {
+        if (body) body.innerHTML = `<tr><td colspan="11" class="empty-state error-text">Error: ${escapeHtml(e.message)}</td></tr>`;
+        showMessage(`Search failed: ${e.message}`, "error");
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = `✦ Search Candidates`; }
+    }
+}
+
+// Render semantic search result rows with expandable "Why Matched" sub-rows
+function renderPoolSemanticSearchResults(results) {
+    const body    = document.getElementById("poolTableBody");
+    const actions = document.getElementById("poolSelectionActions");
+    if (!body) return;
+
+    if (!results || results.length === 0) {
+        body.innerHTML = `<tr><td colspan="11" class="empty-state">No relevant candidates found.</td></tr>`;
+        if (actions) actions.hidden = true;
+        renderPoolPagination();
+        return;
+    }
+
+    if (actions) actions.hidden = false;
+    body.innerHTML = "";
+
+    const offset = (poolState.page - 1) * poolState.limit;
+    results.forEach((c, idx) => {
+        const globalIdx  = offset + idx;
+        const scorePct   = c.score_pct || Math.round((c.score || 0) * 100);
+        const scoreColor = scorePct >= 75 ? "#10b981" : scorePct >= 45 ? "#f59e0b" : "#94a3b8";
+        const scoreClass = scorePct >= 75 ? "high" : scorePct >= 45 ? "medium" : "low";
+
+        const md = c.match_details || {};
+        const matchingSkillsTags = (c.matching_skills || []).map(s => `<span class="matching-skill-tag">${escapeHtml(s)}</span>`).join("");
+        const missingSkillsTags  = (c.missing_skills || []).map(s => `<span class="missing-skill-tag">${escapeHtml(s)}</span>`).join("");
+
+        const rowId = `pool-why-row-${globalIdx}`;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td style="text-align:center; font-weight:700; color:var(--text-muted); font-size:12px;">${globalIdx + 1}</td>
+            <td class="candidate-name-cell" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">${escapeHtml(c.candidate_name)}</td>
+            <td class="role-text">${escapeHtml(c.current_role || "—")}</td>
+            <td>${c.years_of_experience ?? "—"} yrs</td>
+            <td>${escapeHtml(c.uploaded_by || "—")}</td>
+            <td>
+                <div class="ai-score-bar-wrapper">
+                    <span class="ai-score-pct" style="color:${scoreColor}">${scorePct}%</span>
+                    <div class="ai-score-bar"><div class="ai-score-bar-fill ${scoreClass}" style="width:0%" data-target="${scorePct}%"></div></div>
+                </div>
+                <button type="button" class="pool-why-toggle-btn" onclick="togglePoolWhyRow('${rowId}')" style="font-size:10px; color:var(--accent); background:none; border:none; cursor:pointer; padding:2px 0; display:block; margin-top:3px;">▶ Why matched</button>
+            </td>
+            <td>${matchingSkillsTags || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
+            <td>${missingSkillsTags  || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-compare-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-compare-check-s-${globalIdx}"></td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-generate-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-generate-check-s-${globalIdx}"></td>
+            <td style="text-align:center;"><button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">Preview</button></td>`;
+        body.appendChild(tr);
+
+        // "Why Matched" expandable sub-row
+        const whyRow = document.createElement("tr");
+        whyRow.id = rowId;
+        whyRow.style.display = "none";
+        whyRow.innerHTML = `<td colspan="11" style="padding:0; background:var(--surface-hover);">
+            <div class="pool-why-panel" style="padding:14px 20px; border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+                ${buildWhyMatchedHTML(c, md)}
+            </div>
+        </td>`;
+        body.appendChild(whyRow);
+
+        tr.querySelector(".pool-compare-check").addEventListener("change", e => {
+            if (e.target.checked) poolSelectedCompareCandidates.add(c.candidate_name);
+            else poolSelectedCompareCandidates.delete(c.candidate_name);
+            updatePoolSelectionActions();
+        });
+        tr.querySelector(".pool-generate-check").addEventListener("change", e => {
+            if (e.target.checked) poolSelectedGenerateCandidates.add(c.candidate_name);
+            else poolSelectedGenerateCandidates.delete(c.candidate_name);
+            updatePoolSelectionActions();
+        });
+    });
+
+    // Animate score bars
+    requestAnimationFrame(() => setTimeout(() => {
+        body.querySelectorAll(".ai-score-bar-fill[data-target]").forEach(fill => { fill.style.width = fill.dataset.target; });
+    }, 80));
+}
+
+// Build the inner HTML for the "Why this candidate matched" panel
+function buildWhyMatchedHTML(c, md) {
+    const matchingItems = [];
+    if (md.matching_exp) matchingItems.push(md.matching_exp);
+    (md.matching_skills || []).forEach(s => matchingItems.push(s));
+    (md.matching_tech   || []).forEach(t => matchingItems.push(t));
+    (md.matching_domains|| []).forEach(d => matchingItems.push(d));
+
+    const missingItems = [];
+    (md.missing_skills || []).forEach(s => missingItems.push(s));
+    (md.missing_tech   || []).forEach(t => missingItems.push(t));
+    if (md.missing_exp)  missingItems.push(md.missing_exp);
+
+    const matchingHTML = matchingItems.length
+        ? matchingItems.map(i => `<div style="color:#10b981; font-size:12.5px; margin-bottom:3px;">✓ ${escapeHtml(i)}</div>`).join("")
+        : `<div style="color:var(--text-muted); font-size:12px;">No direct skill matches — matched semantically.</div>`;
+
+    const missingHTML = missingItems.length
+        ? missingItems.map(i => `<div style="color:#f59e0b; font-size:12.5px; margin-bottom:3px;">• ${escapeHtml(i)}</div>`).join("")
+        : `<div style="color:var(--text-muted); font-size:12px;">No obvious gaps detected.</div>`;
+
+    const explanation = c.explanation
+        ? `<div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); color:var(--text-secondary); font-size:12.5px; font-style:italic;">"${escapeHtml(c.explanation)}"</div>`
+        : "";
+
+    return `
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px 24px;">
+            <div>
+                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); margin-bottom:6px; font-weight:600;">Why Matched</div>
+                ${matchingHTML}
+            </div>
+            <div>
+                <div style="font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); margin-bottom:6px; font-weight:600;">Missing / Gaps</div>
+                ${missingHTML}
             </div>
         </div>
-    `;
-
-    // Core Skills
-    if (data.skills && data.skills.length > 0) {
-        html += `
-            <div class="profile-section">
-                <h3>Technical & Core Skills</h3>
-                <div class="pills-container">
-                    ${data.skills.map(s => `<span class="pill">${s}</span>`).join('')}
-                </div>
-            </div>
-        `;
-    }
-
-    // Domains
-    if (data.domains && data.domains.length > 0) {
-        html += `
-            <div class="profile-section">
-                <h3>Domain Focus</h3>
-                <div class="pills-container">
-                    ${data.domains.map(d => `<span class="pill">${d}</span>`).join('')}
-                </div>
-            </div>
-        `;
-    }
-
-    // Professional Experience
-    if (data.experience && data.experience.length > 0) {
-        html += `
-            <div class="profile-section">
-                <h3>Professional Experience</h3>
-                <div class="profile-card-list">
-                    ${data.experience.map(exp => `
-                        <div class="profile-subcard">
-                            <div class="subcard-header">
-                                <span class="subcard-title">${exp.company || 'Company'}</span>
-                                <span class="subcard-meta">${exp.start_date || ''} - ${exp.end_date || 'Present'}</span>
-                            </div>
-                            <div class="subcard-subtitle">${exp.role || 'Role'} ${exp.project ? `| Project: ${exp.project}` : ''}</div>
-                            ${exp.technologies && exp.technologies.length > 0 ? `
-                                <div style="margin-top: 6px; margin-bottom: 8px;">
-                                    ${exp.technologies.map(t => `<span class="badge badge-accent" style="margin-right: 4px; font-size: 0.65rem;">${t}</span>`).join('')}
-                                </div>
-                            ` : ''}
-                            ${exp.responsibilities && exp.responsibilities.length > 0 ? `
-                                <ul class="subcard-list">
-                                    ${exp.responsibilities.map(r => `<li>${r}</li>`).join('')}
-                                </ul>
-                            ` : ''}
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
-    }
-
-    // Projects
-    if (data.projects && data.projects.length > 0) {
-        html += `
-            <div class="profile-section">
-                <h3>Projects</h3>
-                <div class="profile-card-list">
-                    ${data.projects.map(proj => `
-                        <div class="profile-subcard">
-                            <div class="subcard-title">${proj.name || 'Project Name'}</div>
-                            <p class="subcard-text" style="margin-top: 6px;">${proj.description || ''}</p>
-                            ${proj.technologies && proj.technologies.length > 0 ? `
-                                <div>
-                                    ${proj.technologies.map(t => `<span class="pill">${t}</span>`).join('')}
-                                </div>
-                            ` : ''}
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
-    }
-
-    // Education
-    if (data.education && data.education.length > 0) {
-        html += `
-            <div class="profile-section">
-                <h3>Education</h3>
-                <div class="profile-card-list">
-                    ${data.education.map(edu => `
-                        <div class="profile-subcard">
-                            <div class="subcard-title">${edu.degree || 'Degree'}</div>
-                            <div class="subcard-subtitle">${edu.institution || 'Institution'}</div>
-                            <span class="subcard-meta">${edu.start_year || ''} - ${edu.end_year || ''}</span>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
-    }
-
-    profileDetailsContent.innerHTML = html;
+        ${explanation}`;
 }
 
-// API: COMPARE SELECTED CANDIDATES
-async function compareCandidates() {
-    showLoading('Generating side-by-side comparison matrix...');
-    const candidateNamesArr = Array.from(state.selectedCandidates);
+// Toggle the Why Matched sub-row open/closed
+function togglePoolWhyRow(rowId) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    const isHidden = row.style.display === "none";
+    row.style.display = isHidden ? "" : "none";
+    // Update button label
+    const btn = row.previousElementSibling?.querySelector(".pool-why-toggle-btn");
+    if (btn) btn.textContent = isHidden ? "▼ Why matched" : "▶ Why matched";
+}
+
+// Render pagination controls
+function renderPoolPagination() {
+    const paginationEl = document.getElementById("poolPagination");
+    const infoEl       = document.getElementById("poolPaginationInfo");
+    const prevBtn      = document.getElementById("poolPrevBtn");
+    const nextBtn      = document.getElementById("poolNextBtn");
+    const pageNums     = document.getElementById("poolPageNumbers");
+    if (!paginationEl) return;
+
+    const { total, page, limit } = poolState;
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    if (total === 0) { paginationEl.hidden = true; return; }
+    paginationEl.hidden = false;
+
+    const from = Math.min((page - 1) * limit + 1, total);
+    const to   = Math.min(page * limit, total);
+    if (infoEl) infoEl.textContent = `Showing ${from}–${to} of ${total} candidates`;
+
+    if (prevBtn) prevBtn.disabled = page <= 1;
+    if (nextBtn) nextBtn.disabled = page >= totalPages;
+
+    if (pageNums) {
+        pageNums.innerHTML = "";
+        const range = buildPageRange(page, totalPages);
+        range.forEach(p => {
+            if (p === "…") {
+                const span = document.createElement("span");
+                span.textContent = "…";
+                span.style.cssText = "padding:0 4px; color:var(--text-muted);";
+                pageNums.appendChild(span);
+            } else {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.textContent = p;
+                btn.className = "btn compact-btn " + (p === page ? "btn-primary" : "btn-secondary");
+                btn.style.minWidth = "32px";
+                btn.addEventListener("click", () => loadPoolPage(p));
+                pageNums.appendChild(btn);
+            }
+        });
+    }
+}
+
+// Build a compact page number range like [1 … 4 5 6 … 12]
+function buildPageRange(current, total) {
+    if (total <= 7) return Array.from({length: total}, (_, i) => i + 1);
+    const pages = new Set([1, total, current]);
+    for (let d = 1; d <= 2; d++) { if (current - d >= 1) pages.add(current - d); if (current + d <= total) pages.add(current + d); }
+    const sorted = Array.from(pages).sort((a, b) => a - b);
+    const result = [];
+    for (let i = 0; i < sorted.length; i++) {
+        if (i > 0 && sorted[i] - sorted[i - 1] > 1) result.push("…");
+        result.push(sorted[i]);
+    }
+    return result;
+}
+
+function clearPoolSearch() {
+    poolSelectedCompareCandidates.clear();
+    poolSelectedGenerateCandidates.clear();
+    activePoolQuery = "";
+
+    const input = document.getElementById("poolSearchInput");
+    if (input) input.value = "";
+
+    const allCompare = document.getElementById("poolCheckAllCompare");
+    if (allCompare) allCompare.checked = false;
+    const allGen = document.getElementById("poolCheckAllGenerate");
+    if (allGen) allGen.checked = false;
+
+    updatePoolSelectionActions();
+
+    const countBadge = document.getElementById("poolResultCount");
+    if (countBadge) countBadge.textContent = "";
+
+    // Return to browse mode
+    loadPoolCandidates(1);
+}
+
+function setPoolSearchQuery(text) {
+    const input = document.getElementById("poolSearchInput");
+    if (input) { input.value = text; input.focus(); }
+}
+
+function updatePoolSelectionActions() {
+    const compareCount  = poolSelectedCompareCandidates.size;
+    const generateCount = poolSelectedGenerateCandidates.size;
+    const compareBtn  = document.getElementById("poolCompareBtn");
+    const generateBtn = document.getElementById("poolGenerateCvsBtn");
+
+    if (compareBtn) {
+        compareBtn.disabled = compareCount < 2;
+        compareBtn.textContent = compareCount > 0 ? `Compare Selected (${compareCount})` : "Compare Selected";
+    }
+    if (generateBtn) {
+        generateBtn.disabled = generateCount === 0;
+        generateBtn.textContent = generateCount > 0 ? `Generate Client CVs (${generateCount})` : "Generate Client CVs";
+    }
+}
+
+function setupPoolSelectAllListeners() {
+    const selectAllCompare  = document.getElementById("poolCheckAllCompare");
+    const selectAllGenerate = document.getElementById("poolCheckAllGenerate");
+
+    if (selectAllCompare) {
+        selectAllCompare.addEventListener("change", e => {
+            document.querySelectorAll(".pool-compare-check").forEach(cb => {
+                cb.checked = e.target.checked;
+                if (e.target.checked) poolSelectedCompareCandidates.add(cb.dataset.name);
+                else poolSelectedCompareCandidates.delete(cb.dataset.name);
+            });
+            updatePoolSelectionActions();
+        });
+    }
+
+    if (selectAllGenerate) {
+        selectAllGenerate.addEventListener("change", e => {
+            document.querySelectorAll(".pool-generate-check").forEach(cb => {
+                cb.checked = e.target.checked;
+                if (e.target.checked) poolSelectedGenerateCandidates.add(cb.dataset.name);
+                else poolSelectedGenerateCandidates.delete(cb.dataset.name);
+            });
+            updatePoolSelectionActions();
+        });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════
+//  AI TALENT SEARCH
+// ═══════════════════════════════════════════════════════
+
+function setupAITalentSearch() {
+    if (_aiSearchSetupDone) return;
+    _aiSearchSetupDone = true;
+
+    const searchBtn = document.getElementById("aiTalentSearchBtn");
+    const input     = document.getElementById("aiTalentSearchInput");
+    const clearBtn  = document.getElementById("aiClearSearchBtn");
+    const filterBtn = document.getElementById("aiFilterApplyBtn");
+    const checkAll  = document.getElementById("checkAllAiResults");
+    const compareBtn = document.getElementById("aiCompareBtn");
+    const genBtn    = document.getElementById("aiGenerateCvsBtn");
+
+    if (searchBtn) searchBtn.addEventListener("click", runAITalentSearch);
+    if (input)     input.addEventListener("keydown", e => { if (e.key === "Enter") runAITalentSearch(); });
+    if (clearBtn)  clearBtn.addEventListener("click", clearAISearch);
+    if (filterBtn) filterBtn.addEventListener("click", runAITalentSearch);
+
+    if (checkAll) checkAll.addEventListener("change", (e) => {
+        document.querySelectorAll(".ai-result-check").forEach(cb => {
+            cb.checked = e.target.checked;
+            if (e.target.checked) aiSearchSelectedCandidates.add(cb.dataset.name);
+            else aiSearchSelectedCandidates.delete(cb.dataset.name);
+        });
+        updateAISelectionActions();
+    });
+
+    if (compareBtn) compareBtn.addEventListener("click", () => {
+        triggerCandidatesComparison(new Set(aiSearchSelectedCandidates), "");
+    });
+
+    if (genBtn) genBtn.addEventListener("click", async () => {
+        await triggerCVsZipDownload(Array.from(aiSearchSelectedCandidates), "", genBtn);
+    });
+}
+
+function setAIQuery(text) {
+    const input = document.getElementById("aiTalentSearchInput");
+    if (input) { input.value = text; input.focus(); }
+}
+
+async function runAITalentSearch() {
+    const query = (document.getElementById("aiTalentSearchInput")?.value || "").trim();
+    if (!query) { showMessage("Please enter a search query.", "error"); return; }
+
+    const btn = document.getElementById("aiTalentSearchBtn");
+    if (btn) { btn.disabled = true; btn.innerHTML = `<span class="ai-search-btn-icon">⏳</span> Searching...`; }
+
+    const panel = document.getElementById("aiSearchResultsPanel");
+    const body  = document.getElementById("aiResultsBody");
+    if (panel) panel.hidden = false;
+    if (body)  body.innerHTML = `<tr><td colspan="9"><div class="ai-searching-state">✦ Analyzing query and searching the talent pool...</div></td></tr>`;
+
+    const expFilter  = document.getElementById("aiFilterExperience")?.value || "";
+    const roleFilter = document.getElementById("aiFilterRole")?.value || "";
+    const recFilter  = document.getElementById("aiFilterRecruiter")?.value || "";
 
     try {
-        const response = await fetch(`${API_BASE}/compare-candidates`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                candidate_names: candidateNamesArr,
-                jd: state.currentJdText
-            })
+        const res = await authedFetch(`${getApiBase()}/api/candidates/semantic-search`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query, top_k: 20, min_score: 0.25, experience: expFilter, role: roleFilter, recruiter: recFilter })
         });
 
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || 'Comparison request failed');
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || "Search failed");
         }
 
-        const data = await response.json();
-        renderComparisonMatrix(data.results);
-        comparisonModal.classList.add('active');
+        const data = await res.json();
+        aiSearchActive = true;
+        aiSearchSelectedCandidates.clear();
 
-    } catch (error) {
-        console.error('Error comparing candidates:', error);
-        showToast('Comparison Failed', error.message || 'Failed to compare candidates.', 'error');
+        const filters = document.getElementById("aiSearchFilters");
+        if (filters) filters.hidden = false;
+
+        const countBadge = document.getElementById("aiResultCount");
+        const queryLabel = document.getElementById("aiResultQueryLabel");
+        if (countBadge) countBadge.textContent = `(${data.count})`;
+        if (queryLabel) queryLabel.textContent  = `Query: "${data.query}"`;
+
+        renderSemanticSearchResults(data.results, data.query);
+
+    } catch (e) {
+        if (body) body.innerHTML = `<tr><td colspan="9"><div class="empty-state error-text">Error: ${escapeHtml(e.message)}</div></td></tr>`;
+        showMessage(`AI Search failed: ${e.message}`, "error");
     } finally {
-        hideLoading();
+        if (btn) { btn.disabled = false; btn.innerHTML = `<span class="ai-search-btn-icon">✦</span> Search`; }
     }
 }
 
-// RENDER COMPARISON MATRIX
-function renderComparisonMatrix(results) {
-    // Clear
-    comparisonThead.innerHTML = '';
-    comparisonTbody.innerHTML = '';
+function renderSemanticSearchResults(results, query) {
+    const body    = document.getElementById("aiResultsBody");
+    const actions = document.getElementById("aiSelectionActions");
+    if (!body) return;
 
-    // 1. Headers: Features | Candidate 1 | Candidate 2 ...
-    const trHead = document.createElement('tr');
-    trHead.innerHTML = `<th>Features</th>`;
-    results.forEach(res => {
-        trHead.innerHTML += `
-            <th class="candidate-col">
-                <span class="comp-cand-name">${res.candidate_name}</span>
-                <span class="comp-cand-role">${res.current_role || 'Not Specified'}</span>
-            </th>
-        `;
-    });
-    comparisonThead.appendChild(trHead);
+    if (!results || results.length === 0) {
+        body.innerHTML = `<tr><td colspan="9"><div class="ai-no-results"><span class="ai-no-results-icon">🔍</span><h3>No relevant candidates found</h3><p>Try broadening your search query or uploading additional resumes.</p></div></td></tr>`;
+        if (actions) actions.hidden = true;
+        return;
+    }
 
-    // 2. Row: Similarity Score (Renamed from Match Score)
-    const trScore = document.createElement('tr');
-    trScore.innerHTML = `<td>Similarity Score</td>`;
-    results.forEach(res => {
-        const score = Math.round(res.match_score);
-        let scoreClass = 'score-poor';
-        if (score >= 80) scoreClass = 'score-excellent';
-        else if (score >= 50) scoreClass = 'score-good';
-        trScore.innerHTML += `
-            <td>
-                <span class="score-badge ${scoreClass}">${score}% Semantic Match</span>
+    if (actions) actions.hidden = false;
+    body.innerHTML = "";
+
+    results.forEach((c, idx) => {
+        const scorePct   = c.score_pct || Math.round(c.score * 100);
+        const scoreClass = scorePct >= 70 ? "high" : scorePct >= 45 ? "medium" : "low";
+        const scoreColor = scorePct >= 70 ? "#10b981" : scorePct >= 45 ? "#f59e0b" : "#94a3b8";
+        const skillTags  = (c.skills || []).slice(0, 4).map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join("");
+        const explanation = c.explanation || "";
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td class="checkbox-col">
+                <input type="checkbox" class="ai-result-check" data-name="${escapeHtml(c.candidate_name)}" id="ai-check-${idx}">
             </td>
-        `;
-    });
-    comparisonTbody.appendChild(trScore);
-
-    // 3. Row: Experience
-    const trExp = document.createElement('tr');
-    trExp.innerHTML = `<td>Experience</td>`;
-    results.forEach(res => {
-        trExp.innerHTML += `
+            <td style="text-align:center; font-weight:700; color:var(--muted);">#${idx + 1}</td>
+            <td class="candidate-name-cell" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">${escapeHtml(c.candidate_name)}</td>
+            <td class="role-text">${escapeHtml(c.current_role || "Unknown")}</td>
+            <td>${c.years_of_experience} yrs</td>
+            <td>${escapeHtml(c.uploaded_by || "")}</td>
             <td>
-                <span class="exp-badge">${res.years_of_experience || 0} Years</span>
+                <div class="ai-score-bar-wrapper">
+                    <span class="ai-score-pct" style="color:${scoreColor}">${scorePct}%</span>
+                    <div class="ai-score-bar"><div class="ai-score-bar-fill ${scoreClass}" style="width:0%" data-target="${scorePct}%"></div></div>
+                </div>
             </td>
-        `;
-    });
-    comparisonTbody.appendChild(trExp);
+            <td>${skillTags}</td>
+            <td>
+                <div class="actions-cell-wrap" style="display:flex; gap:6px;">
+                    <button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">Profile</button>
+                    <button type="button" class="btn btn-secondary compact-btn" onclick="triggerSingleCandidateComparison('${escapeHtml(c.candidate_name)}')">Compare</button>
+                    <button type="button" class="btn btn-primary compact-btn" onclick="triggerSingleCandidateCv('${escapeHtml(c.candidate_name)}')">Generate CV</button>
+                </div>
+            </td>`;
+        body.appendChild(tr);
 
-    // 4. Row: Strengths
-    const trStrengths = document.createElement('tr');
-    trStrengths.innerHTML = `<td>Key Strengths</td>`;
-    results.forEach(res => {
-        const listItems = res.strengths.map(s => `<li>${s}</li>`).join('');
-        trStrengths.innerHTML += `<td><ul class="comp-ul">${listItems || 'None extracted'}</ul></td>`;
-    });
-    comparisonTbody.appendChild(trStrengths);
-
-    // 5. Row: Core Skills
-    const trSkills = document.createElement('tr');
-    trSkills.innerHTML = `<td>Matching Skills</td>`;
-    results.forEach(res => {
-        const listItems = res.key_skills.map(s => `<span class="pill" style="margin-right: 4px; margin-bottom: 4px; display: inline-block;">${s}</span>`).join('');
-        trSkills.innerHTML += `<td><div>${listItems || 'None matched'}</div></td>`;
-    });
-    comparisonTbody.appendChild(trSkills);
-
-    // 6. Row: Domains
-    const trDomains = document.createElement('tr');
-    trDomains.innerHTML = `<td>Domains</td>`;
-    results.forEach(res => {
-        const listItems = res.domains.map(d => `<span class="pill" style="margin-right: 4px; margin-bottom: 4px; display: inline-block;">${d}</span>`).join('');
-        trDomains.innerHTML += `<td><div>${listItems || 'None detected'}</div></td>`;
-    });
-    comparisonTbody.appendChild(trDomains);
-
-    // 7. Row: Education
-    const trEdu = document.createElement('tr');
-    trEdu.innerHTML = `<td>Education</td>`;
-    results.forEach(res => {
-        const eduInfo = res.education && res.education.length > 0 ? 
-            res.education.map(e => `${e.degree || 'Degree'} - ${e.institution || 'Institution'}`).join('<br>') : 
-            'Not Specified';
-        trEdu.innerHTML += `<td>${eduInfo}</td>`;
-    });
-    comparisonTbody.appendChild(trEdu);
-}
-
-// API: GENERATE CLIENT CVS AND DOWNLOAD ZIP
-async function generateSelectedCvs() {
-    showLoading('Generating client CVs and assembling ZIP archive...');
-    const candidateNamesArr = Array.from(state.selectedCandidates);
-
-    try {
-        const response = await fetch(`${API_BASE}/generate-selected-cvs`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                candidate_names: candidateNamesArr,
-                jd: state.currentJdText
-            })
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || 'CV generation request failed');
+        let strengthsHtml = "";
+        if (c.strengths && c.strengths.length) {
+            strengthsHtml = `<div class="ai-strengths-list" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:4px; align-items:center;">
+                <strong style="font-size:11.5px; color:var(--text-primary); margin-right:4px;">Key Strengths:</strong>
+                ${c.strengths.slice(0, 4).map(s => `<span class="matching-skill-tag" style="background:var(--primary-light); color:var(--primary); font-size:10.5px; padding: 2px 6px;">${escapeHtml(s)}</span>`).join("")}
+            </div>`;
         }
 
-        const blob = await response.blob();
-        
-        // Download Zip
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = 'selected_cvs.zip';
-        document.body.appendChild(a);
+        if (explanation) {
+            const expTr = document.createElement("tr");
+            expTr.className = "ai-explanation-row";
+            expTr.innerHTML = `
+                <td colspan="9">
+                    <div class="ai-explanation-text" style="display:flex; flex-direction:column; gap:4px;">
+                        <div><span class="ai-explanation-icon">✦</span> <strong>Assessment:</strong> ${escapeHtml(explanation)}</div>
+                        ${strengthsHtml}
+                    </div>
+                </td>`;
+            body.appendChild(expTr);
+        }
+
+        tr.querySelector(".ai-result-check").addEventListener("change", (e) => {
+            if (e.target.checked) aiSearchSelectedCandidates.add(c.candidate_name);
+            else aiSearchSelectedCandidates.delete(c.candidate_name);
+            updateAISelectionActions();
+        });
+    });
+
+    // Animate score bars
+    requestAnimationFrame(() => setTimeout(() => {
+        body.querySelectorAll(".ai-score-bar-fill[data-target]").forEach(fill => { fill.style.width = fill.dataset.target; });
+    }, 80));
+}
+
+function updateAISelectionActions() {
+    const count = aiSearchSelectedCandidates.size;
+    const compareBtn = document.getElementById("aiCompareBtn");
+    const genBtn     = document.getElementById("aiGenerateCvsBtn");
+    if (compareBtn) compareBtn.disabled = count < 2;
+    if (genBtn)     genBtn.disabled     = count === 0;
+}
+
+function clearAISearch() {
+    aiSearchActive = false;
+    aiSearchSelectedCandidates.clear();
+    const input   = document.getElementById("aiTalentSearchInput");
+    const panel   = document.getElementById("aiSearchResultsPanel");
+    const filters = document.getElementById("aiSearchFilters");
+    const body    = document.getElementById("aiResultsBody");
+    const checkAll = document.getElementById("checkAllAiResults");
+    if (input)   input.value = "";
+    if (panel)   panel.hidden = true;
+    if (filters) filters.hidden = true;
+    if (body)    body.innerHTML = "";
+    if (checkAll) checkAll.checked = false;
+    updateAISelectionActions();
+}
+
+// ═══════════════════════════════════════════════════════
+//  JOB DESCRIPTIONS
+// ═══════════════════════════════════════════════════════
+
+async function fetchJobDescriptions() {
+    const container = document.getElementById("jdsContainer");
+    if (!container) return;
+    container.innerHTML = `<div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>`;
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions`);
+        if (!res.ok) throw new Error("Failed to load JDs");
+        const jds = await res.json();
+        container.innerHTML = "";
+
+        if (jds.length === 0) {
+            container.innerHTML = `<p class="empty-state" style="grid-column:1/-1;">No saved job descriptions yet. Click "Add Job Description" to create one.</p>`;
+            return;
+        }
+
+        jds.forEach(jd => {
+            const card = document.createElement("div");
+            card.className = "jd-card";
+            card.innerHTML = `
+                <div class="jd-title-row">
+                    <h3>${escapeHtml(jd.title)}</h3>
+                    <div class="jd-meta">
+                        <span>By: <strong>${escapeHtml(jd.created_by || "—")}</strong></span>
+                        <span>${formatToKolkataTime(jd.created_date)}</span>
+                    </div>
+                    <p class="jd-body-preview">${escapeHtml(jd.description)}</p>
+                </div>
+                <div class="jd-footer">
+                    <span class="jd-matches-count" style="cursor:pointer;" onclick="viewJdMatches(${jd.jd_id}, '${escapeHtml(jd.title)}')">${jd.match_count ?? 0} Matches</span>
+                    <div class="jd-actions">
+                        <button type="button" class="btn btn-secondary compact-btn" onclick="triggerJdMatch(${jd.jd_id})">Match</button>
+                        <button type="button" class="btn btn-secondary compact-btn" onclick="viewJdMatches(${jd.jd_id}, '${escapeHtml(jd.title)}')">View Matches</button>
+                        <button type="button" class="btn btn-secondary compact-btn" onclick="copyJobDescription(${jd.jd_id})">Copy Job Description</button>
+                        <button type="button" class="btn btn-secondary compact-btn" onclick="duplicateJobDescription(${jd.jd_id})">Duplicate</button>
+                        <button type="button" class="btn btn-ghost compact-btn" onclick="editJobDescription(${jd.jd_id})">Edit</button>
+                        <button type="button" class="btn btn-danger compact-btn" onclick="deleteJobDescription(${jd.jd_id})">Delete</button>
+                    </div>
+                </div>`;
+            container.appendChild(card);
+        });
+    } catch (e) {
+        container.innerHTML = `<p class="empty-state error-text" style="grid-column:1/-1;">Error loading job descriptions: ${e.message}</p>`;
+    }
+}
+
+// Trigger "Match Candidates" from JD card → navigates to New Recruitment with JD prefilled
+async function triggerJdMatch(jdId) {
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions/${jdId}`);
+        if (!res.ok) throw new Error("Could not fetch JD");
+        const jd = await res.json();
+
+        window.location.hash = "new-recruitment";
+        switchView("new-recruitment");
+
+        setTimeout(() => {
+            const textarea = document.getElementById("nrJdText");
+            const select   = document.getElementById("nrJdSelect");
+            if (textarea) textarea.value = jd.description || "";
+            if (select) {
+                Array.from(select.options).forEach(opt => {
+                    if (parseInt(opt.value) === jdId) opt.selected = true;
+                });
+            }
+            nrShowStep(3);
+            showMessage(`JD "${jd.title}" loaded — add resumes and rank candidates.`, "info");
+        }, 300);
+    } catch (e) {
+        showMessage(`Failed to load JD: ${e.message}`, "error");
+    }
+}
+
+function setupJdModal() {
+    const addJdBtn = document.getElementById("addJdBtn");
+    if (addJdBtn) addJdBtn.addEventListener("click", showJdModal);
+
+    const jdModalCloseBtn = document.getElementById("jdModalCloseBtn");
+    if (jdModalCloseBtn) jdModalCloseBtn.addEventListener("click", hideJdModal);
+
+    const jdModalOverlay = document.getElementById("jdModalOverlay");
+    if (jdModalOverlay) jdModalOverlay.addEventListener("click", (e) => { if (e.target === jdModalOverlay) hideJdModal(); });
+
+    const jdMatchesModalCloseBtn = document.getElementById("jdMatchesModalCloseBtn");
+    if (jdMatchesModalCloseBtn) {
+        jdMatchesModalCloseBtn.addEventListener("click", () => {
+            const overlay = document.getElementById("jdMatchesModalOverlay");
+            if (overlay) overlay.hidden = true;
+        });
+    }
+    const jdMatchesModalOverlay = document.getElementById("jdMatchesModalOverlay");
+    if (jdMatchesModalOverlay) {
+        jdMatchesModalOverlay.addEventListener("click", (e) => {
+            if (e.target === jdMatchesModalOverlay) jdMatchesModalOverlay.hidden = true;
+        });
+    }
+
+    const extractModalJdBtn = document.getElementById("extractModalJdBtn");
+    if (extractModalJdBtn) extractModalJdBtn.addEventListener("click", async () => {
+        const fileInput = document.getElementById("jdModalFile");
+        const file = fileInput?.files[0];
+        if (!file) { showMessage("Please select a file first.", "error"); return; }
+        extractModalJdBtn.disabled = true;
+        extractModalJdBtn.textContent = "Extracting...";
+        try {
+            const fd = new FormData();
+            fd.append("file", file);
+            const res = await authedFetch(`${getApiBase()}/extract-jd-text`, { method: "POST", body: fd });
+            if (!res.ok) throw new Error("Extraction failed");
+            const data = await res.json();
+            const textarea = document.getElementById("jdModalText");
+            if (textarea && data.text) textarea.value = data.text;
+        } catch (e) {
+            showMessage(`Extraction failed: ${e.message}`, "error");
+        } finally {
+            extractModalJdBtn.disabled = false;
+            extractModalJdBtn.textContent = "Extract";
+        }
+    });
+
+    const jdForm = document.getElementById("jdForm");
+    if (jdForm) jdForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const title       = document.getElementById("jdModalRole")?.value.trim();
+        const description = document.getElementById("jdModalText")?.value.trim();
+        const id          = document.getElementById("jdModalId")?.value;
+        if (!title || !description) { showMessage("Please fill in all required fields.", "error"); return; }
+
+        const method = id ? "PUT" : "POST";
+        const url    = id ? `${getApiBase()}/api/job-descriptions/${id}` : `${getApiBase()}/api/job-descriptions`;
+        try {
+            const res = await authedFetch(url, {
+                method,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title, description })
+            });
+            if (!res.ok) throw new Error("Failed to save job description");
+            hideJdModal();
+            showMessage("Job description saved!", "success");
+            await fetchJobDescriptions();
+        } catch (e) { showMessage(e.message, "error"); }
+    });
+}
+
+function showJdModal() {
+    document.getElementById("jdModalOverlay").hidden = false;
+    document.getElementById("jdModalTitle").textContent = "Save Job Description";
+    document.getElementById("jdModalId").value = "";
+    document.getElementById("jdForm").reset();
+}
+
+function hideJdModal() {
+    document.getElementById("jdModalOverlay").hidden = true;
+    document.getElementById("jdForm").reset();
+    document.getElementById("jdModalId").value = "";
+}
+
+async function editJobDescription(jdId) {
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions/${jdId}`);
+        if (!res.ok) throw new Error("Could not fetch JD data");
+        const jd = await res.json();
+        document.getElementById("jdModalId").value    = jd.jd_id;
+        document.getElementById("jdModalRole").value  = jd.title;
+        document.getElementById("jdModalText").value  = jd.description;
+        document.getElementById("jdModalTitle").textContent = "Edit Job Description";
+        document.getElementById("jdModalOverlay").hidden = false;
+    } catch (e) { showMessage(e.message, "error"); }
+}
+
+async function deleteJobDescription(jdId) {
+    if (!confirm("Are you sure you want to delete this job description?")) return;
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions/${jdId}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("Deletion failed");
+        showMessage("Job description deleted.", "info");
+        await fetchJobDescriptions();
+    } catch (e) { showMessage(e.message, "error"); }
+}
+
+// ═══════════════════════════════════════════════════════
+//  GENERATED CVS
+// ═══════════════════════════════════════════════════════
+
+async function fetchGeneratedCvs() {
+    const tbody = document.getElementById("generatedCvsTableBody");
+    if (!tbody) return;
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state"><div class="spinner" style="margin:0 auto 8px;"></div>Loading...</td></tr>`;
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/generated-cvs`);
+        if (!res.ok) throw new Error("Failed to load CVs");
+        const cvs = await res.json();
+        tbody.innerHTML = "";
+
+        if (!cvs || cvs.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="empty-state">No CVs generated yet. Use New Recruitment to generate client CVs.</td></tr>`;
+            return;
+        }
+
+        cvs.forEach(cv => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td style="font-weight:600;">${escapeHtml(cv.candidate_name || "—")}</td>
+                <td class="role-text">${escapeHtml(cv.jd_title || "—")}</td>
+                <td>${escapeHtml(cv.generated_by || "—")}</td>
+                <td>${formatToKolkataTime(cv.generated_date)}</td>
+                <td>
+                    <div class="actions-cell-wrap" style="display:flex; gap:6px;">
+                        <button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(cv.candidate_name)}')">Preview</button>
+                        <a href="${getApiBase()}/api/generated-cvs/${cv.candidate_id}/download"
+                           class="btn btn-secondary compact-btn" download>⬇ Download</a>
+                        <button type="button" class="btn btn-danger compact-btn" onclick="deleteGeneratedCv(${cv.candidate_id})">Delete</button>
+                    </div>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-state error-text">Error: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+//  ANALYTICS
+// ═══════════════════════════════════════════════════════
+
+async function fetchAnalytics() {
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/analytics`);
+        if (!res.ok) throw new Error("Analytics failed");
+        const data = await res.json();
+        renderAnalytics(data);
+    } catch (e) {
+        console.error("Analytics error:", e);
+    }
+}
+
+function renderAnalytics(data) {
+    renderBarChart("chartExperience", data.experience_distribution || {});
+    renderBarChart("chartSkills",     data.skill_distribution     || {});
+    renderBarChart("chartRecruiters", data.recruiter_distribution || {});
+    renderBarChart("chartTrends",     data.upload_trends          || {});
+}
+
+function renderBarChart(containerId, data) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const entries = Object.entries(data).sort(([,a],[,b]) => b - a).slice(0, 10);
+    const max = entries.length > 0 ? Math.max(...entries.map(([,v]) => v)) : 1;
+
+    if (entries.length === 0) {
+        container.innerHTML = `<p class="empty-state">No data available.</p>`;
+        return;
+    }
+
+    container.innerHTML = `<div class="bar-chart">${
+        entries.map(([label, value]) => {
+            const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+            return `<div class="bar-item">
+                <span class="bar-label" title="${escapeHtml(String(label))}">${escapeHtml(String(label))}</span>
+                <div class="bar-track">
+                    <div class="bar-fill" style="width:${pct}%">${value > 0 ? value : ""}</div>
+                </div>
+                <span class="bar-count">${value}</span>
+            </div>`;
+        }).join("")
+    }</div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+//  CANDIDATE PROFILE DRAWER
+// ═══════════════════════════════════════════════════════
+
+async function viewCandidateProfile(candidateName) {
+    const drawer = document.getElementById("candidateProfileDrawer");
+    if (!drawer) return;
+    drawer.hidden = false;
+
+    document.getElementById("drawerCandidateName").textContent = candidateName;
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/candidate/${encodeURIComponent(candidateName)}`);
+        if (!res.ok) throw new Error("Profile not found");
+        const c = await res.json();
+
+        const notAvail = "Not available";
+
+        document.getElementById("drawerCandidateName").textContent = c.candidate_name || candidateName;
+
+        // Sub-title: current role
+        const roleEl = document.getElementById("drawerCurrentRole");
+        if (roleEl) roleEl.textContent = c.current_role || c.role || "";
+
+        // Contact card
+        const yrsEl = document.getElementById("drawerYearsExp");
+        if (yrsEl) {
+            const yrs = c.years_of_experience ?? c.experience_years ?? null;
+            yrsEl.textContent = (yrs !== null && yrs !== "") ? `${yrs} years` : notAvail;
+        }
+        document.getElementById("drawerEmployeeId").textContent  = c.employee_id  || notAvail;
+        document.getElementById("drawerEmail").textContent       = c.email        || notAvail;
+        document.getElementById("drawerPhone").textContent       = c.phone        || notAvail;
+        const locEl = document.getElementById("drawerLocation");
+        if (locEl) locEl.textContent = c.location || notAvail;
+        document.getElementById("drawerUploaderName").textContent = c.uploaded_by || notAvail;
+
+        const linkedinEl = document.getElementById("drawerLinkedIn");
+        if (linkedinEl) {
+            const linkedin = c.linkedin || "";
+            if (linkedin) {
+                const url = linkedin.startsWith("http") ? linkedin : `https://linkedin.com/in/${linkedin}`;
+                linkedinEl.innerHTML = `<a href="${escapeHtml(url)}" target="_blank" style="color:var(--accent); text-decoration:underline;">${escapeHtml(linkedin)}</a>`;
+            } else {
+                linkedinEl.textContent = notAvail;
+            }
+        }
+
+        const githubEl = document.getElementById("drawerGitHub");
+        if (githubEl) {
+            const github = c.github || "";
+            if (github) {
+                const url = github.startsWith("http") ? github : `https://github.com/${github}`;
+                githubEl.innerHTML = `<a href="${escapeHtml(url)}" target="_blank" style="color:var(--accent); text-decoration:underline;">${escapeHtml(github)}</a>`;
+            } else {
+                githubEl.textContent = notAvail;
+            }
+        }
+
+        document.getElementById("drawerResumeName").textContent  = c.resume_filename || c.filename || notAvail;
+
+        const downloadLink = document.getElementById("drawerResumeDownloadLink");
+        if (downloadLink) downloadLink.href = c.resume_url || "#";
+
+        // About / Summary
+        document.getElementById("drawerAbout").textContent = c.professional_summary || c.about_candidate || c.about || "No summary available.";
+
+        // Education
+        const educationContainer = document.getElementById("drawerEducation");
+        if (educationContainer) {
+            const edu = c.education || [];
+            educationContainer.innerHTML = edu.length === 0 ? "<p class='empty-state'>No education data.</p>" :
+                edu.map(e => `
+                    <div class="education-item" style="border-left:2px solid var(--border); padding-left:12px; margin-bottom:8px;">
+                        <div style="font-weight:600; color:var(--text-primary); font-size:13px;">${escapeHtml(e.degree || "—")}</div>
+                        <div style="color:var(--text-secondary); font-size:12.5px;">${escapeHtml(e.institution || "—")}</div>
+                        <div style="color:var(--text-muted); font-size:11.5px;">${escapeHtml(e.start_year || "—")} – ${escapeHtml(e.end_year || "—")}</div>
+                    </div>`).join("");
+        }
+
+        // Experience timeline
+        const timeline = document.getElementById("drawerExperienceTimeline");
+        if (timeline) {
+            const exp = c.work_experience || c.experience || [];
+            timeline.innerHTML = exp.length === 0 ? "<p class='empty-state'>No experience data.</p>" :
+                exp.map(e => `
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <div class="timeline-content">
+                            <div class="timeline-role">${escapeHtml(e.title || e.role || "—")}</div>
+                            <div class="timeline-company">${escapeHtml(e.company || "—")}</div>
+                            <div class="timeline-duration">${escapeHtml(e.duration || e.dates || "—")}</div>
+                        </div>
+                    </div>`).join("");
+        }
+
+        // Skills
+        const skillsContainer = document.getElementById("drawerSkillsTags");
+        if (skillsContainer) {
+            const skills = c.skills || c.key_skills || [];
+            skillsContainer.innerHTML = skills.length === 0 ? "<p class='empty-state'>No skills listed.</p>" :
+                skills.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join("");
+        }
+
+        // Projects
+        const projectsList = document.getElementById("drawerProjectsList");
+        if (projectsList) {
+            const projs = c.projects || [];
+            projectsList.innerHTML = projs.length === 0 ? "<p class='empty-state'>No projects listed.</p>" :
+                projs.map(p => `
+                    <div class="project-item">
+                        <div class="project-name">${escapeHtml(p.name || p.title || "Project")}</div>
+                        <div class="project-desc">${escapeHtml(p.description || "")}</div>
+                    </div>`).join("");
+        }
+
+        // Reset to first tab
+        switchDrawerTab("tab-summary");
+
+    } catch (e) {
+        document.getElementById("drawerAbout").textContent = `Could not load profile: ${e.message}`;
+    }
+}
+
+
+function switchDrawerTab(tabId) {
+    document.querySelectorAll(".drawer-tab").forEach(t => t.classList.toggle("active", t.getAttribute("data-tab") === tabId));
+    document.querySelectorAll(".drawer-pane").forEach(p => p.classList.toggle("active", p.id === tabId));
+}
+
+// ═══════════════════════════════════════════════════════
+//  CANDIDATE COMPARISON
+// ═══════════════════════════════════════════════════════
+
+async function triggerCandidatesComparison(selectedSet, jdText) {
+    const overlay = document.getElementById("candidateComparisonOverlay");
+    const body    = document.getElementById("comparisonOverlayBody");
+    if (!overlay || !body) return;
+
+    if (selectedSet.size < 2) {
+        showMessage("Select at least 2 candidates to compare.", "error");
+        return;
+    }
+
+    body.innerHTML = `<div class="spinner" style="margin:40px auto;"></div><p style="text-align:center;">Compiling comparison...</p>`;
+    overlay.hidden = false;
+
+    try {
+        const names = Array.from(selectedSet);
+        const res = await authedFetch(`${getApiBase()}/compare-candidates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidate_names: names, jd: jdText || "General Profile Comparison" })
+        });
+
+        if (!res.ok) throw new Error("Comparison service failed");
+        const data = await res.json();
+        const results = data.results || [];
+
+        if (results.length === 0) {
+            body.innerHTML = `<div class="empty-state">No comparison details returned.</div>`;
+            return;
+        }
+
+        let table = `<table class="comparison-overlay-table"><thead><tr><th style="width:160px;">Category</th>`;
+        results.forEach(c => { table += `<th class="comparison-candidate-header">${escapeHtml(c.candidate_name)}</th>`; });
+        table += `</tr></thead><tbody>`;
+
+        const addRow = (label, fn) => {
+            table += `<tr><td><strong>${label}</strong></td>`;
+            results.forEach(c => { table += `<td>${fn(c)}</td>`; });
+            table += `</tr>`;
+        };
+
+        const bulletList = (items, escape = true) => {
+            if (!items || !items.length) return `<span style="color:var(--muted); font-size:12px;">—</span>`;
+            return `<ul class="comparison-bullet-list">${items.slice(0, 8).map(i => `<li>${escape ? escapeHtml(String(i)) : String(i)}</li>`).join("")}</ul>`;
+        };
+
+        addRow("Match Score", c => {
+            const score = Math.round(c.match_score || 0);
+            const cls   = score >= 75 ? "high" : score >= 45 ? "medium" : "low";
+            return `<span class="score-badge ${cls}">${score}%</span>`;
+        });
+        addRow("Experience", c => `${c.years_of_experience ?? "—"} yrs`);
+        addRow("Current Role", c => escapeHtml(c.current_role || "—"));
+        addRow("Education", c => {
+            const eduList = (c.education || []).map(e => `<strong>${escapeHtml(e.degree || '—')}</strong><br>${escapeHtml(e.institution || '—')} (${escapeHtml(e.start_year || '?')} - ${escapeHtml(e.end_year || '?')})`);
+            return bulletList(eduList, false);
+        });
+        addRow("Skills", c => bulletList(c.key_skills || c.skills, true));
+        addRow("Strengths", c => bulletList(c.strengths, true));
+        addRow("Assessment", c => escapeHtml(c.about_candidate || c.assessment || "—"));
+        addRow("Projects", c => {
+            const projList = (c.projects || []).map(p => `<strong>${escapeHtml(p.name || '—')}</strong>: ${escapeHtml(p.description || '—')} ${p.technologies && p.technologies.length ? `<br><em style="font-size:11px; color:var(--primary);">Tech: ${p.technologies.join(", ")}</em>` : ""}`);
+            return bulletList(projList, false);
+        });
+
+        table += `</tbody></table>`;
+        body.innerHTML = `<div style="overflow-x:auto; padding:4px;">${table}</div>`;
+
+        document.getElementById("comparisonSubTitle").textContent = `Comparing ${names.length} candidates`;
+
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state error-text">Comparison failed: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+//  CV GENERATION (with ZIP download)
+// ═══════════════════════════════════════════════════════
+
+async function triggerCVsZipDownload(names, jdText, triggerBtn) {
+    if (!names || names.length === 0) { showMessage("Select at least one candidate.", "error"); return; }
+    if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = "Generating..."; }
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/generate-selected-cvs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ candidate_names: names, jd: jdText || "General Profile" })
+        });
+
+        if (!res.ok) throw new Error(await res.text() || "Generation failed");
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement("a");
+        a.href     = url;
+        a.download = `CVs_${new Date().toISOString().slice(0,10)}.zip`;
         a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showMessage(`${names.length} CV(s) generated and downloading...`, "success");
+        await fetchGeneratedCvs();
 
-        showToast('CV Generation', 'Successfully generated and downloaded ZIP with selected CVs!', 'success');
-        
-        // Reset selection after download
-        state.selectedCandidates.clear();
-        const checkboxes = candidatesTbody.querySelectorAll('.cand-checkbox');
-        checkboxes.forEach(cb => cb.checked = false);
-        masterCheckbox.checked = false;
-        updateSelectionState();
-
-    } catch (error) {
-        console.error('Error generating selected CVs:', error);
-        showToast('Generation Failed', error.message || 'Failed to generate CVs.', 'error');
+    } catch (e) {
+        showMessage(`CV generation failed: ${e.message}`, "error");
     } finally {
-        hideLoading();
+        if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.textContent = "Generate CVs"; }
     }
 }
 
-// MODAL WINDOW CONTROL
-function setupModals() {
-    // Close profile details modal
-    closeCandidateModal.addEventListener('click', () => {
-        candidateModal.classList.remove('active');
-    });
+// ═══════════════════════════════════════════════════════
+//  PAGINATION
+// ═══════════════════════════════════════════════════════
 
-    candidateModal.addEventListener('click', (e) => {
-        if (e.target === candidateModal) {
-            candidateModal.classList.remove('active');
+function renderPagination(state, paginationEl, fetchFunc) {
+    if (!paginationEl) return;
+    const { page, limit, total } = state;
+    const totalPages = Math.ceil(total / limit);
+    const start = (page - 1) * limit + 1;
+    const end   = Math.min(page * limit, total);
+
+    const infoEl   = paginationEl.querySelector(".pagination-info");
+    const prevBtn  = paginationEl.querySelector(".prev-btn");
+    const nextBtn  = paginationEl.querySelector(".next-btn");
+
+    if (infoEl)  infoEl.textContent = total > 0 ? `Showing ${start}–${end} of ${total}` : "No results";
+    if (prevBtn) { prevBtn.disabled = page <= 1; prevBtn.onclick = () => { state.page--; fetchFunc(); }; }
+    if (nextBtn) { nextBtn.disabled = page >= totalPages; nextBtn.onclick = () => { state.page++; fetchFunc(); }; }
+}
+
+// ═══════════════════════════════════════════════════════
+//  SETTINGS — CHANGE PASSWORD
+// ═══════════════════════════════════════════════════════
+
+function setupChangePassword() {
+    const form = document.getElementById("changePasswordForm");
+    if (!form) return;
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const oldPw  = document.getElementById("oldPassword")?.value;
+        const newPw  = document.getElementById("newPassword")?.value;
+        const confPw = document.getElementById("confirmPassword")?.value;
+
+        if (newPw !== confPw) { showMessage("New passwords do not match.", "error"); return; }
+
+        const btn = document.getElementById("changePasswordBtn");
+        if (btn) btn.disabled = true;
+
+        try {
+            const res = await authedFetch(`${getApiBase()}/api/change-password`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ old_password: oldPw, new_password: newPw })
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || "Password change failed");
+            }
+            showMessage("Password updated successfully.", "success");
+            form.reset();
+        } catch (e) {
+            showMessage(e.message, "error");
+        } finally {
+            if (btn) btn.disabled = false;
         }
     });
+}
 
-    // Close comparison matrix modal
-    closeComparisonModal.addEventListener('click', () => {
-        comparisonModal.classList.remove('active');
+// ═══════════════════════════════════════════════════════
+//  LOGOUT
+// ═══════════════════════════════════════════════════════
+
+async function handleLogoutClick() {
+    try {
+        await authedFetch(`${getApiBase()}/logout`, { method: "POST" });
+    } catch (e) { console.error("Logout request failed:", e); }
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("username");
+    sessionStorage.removeItem("access_token");
+    sessionStorage.removeItem("username");
+    window.location.href = "/login";
+}
+
+// ─── Single Row Candidate Actions (Rankings / Pool / Search) ──────────────────────────
+
+function triggerSingleCandidateComparison(name) {
+    const jdText = document.getElementById("nrJdText")?.value || "";
+    triggerCandidatesComparison(new Set([name]), jdText);
+}
+
+function triggerSingleCandidateCv(name) {
+    const jdText = document.getElementById("nrJdText")?.value || "";
+    const singleSet = [name];
+    
+    // Switch to step 5 (CV generation step) visually
+    const step5 = document.getElementById("nrStep5");
+    if (step5) step5.style.display = "";
+    nrShowStep(5);
+    
+    const countEl = document.getElementById("nrGenerateCount");
+    if (countEl) countEl.textContent = "1";
+    
+    const progress = document.getElementById("nrGenerateProgress");
+    const result = document.getElementById("nrGenerateResult");
+    if (progress) progress.style.display = "flex";
+    if (result) result.style.display = "none";
+    
+    triggerCVsZipDownload(singleSet, jdText, null).then(() => {
+        if (progress) progress.style.display = "none";
+        if (result) result.style.display = "block";
+    }).catch(e => {
+        if (progress) progress.style.display = "none";
+        showMessage(`Generation failed: ${e.message}`, "error");
     });
+}
 
-    comparisonModal.addEventListener('click', (e) => {
-        if (e.target === comparisonModal) {
-            comparisonModal.classList.remove('active');
+// ─── Job Description Duplication & Matches Modal ──────────────────────────
+
+async function duplicateJobDescription(jdId) {
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions/${jdId}`);
+        if (!res.ok) throw new Error("Could not fetch JD data to duplicate");
+        const jd = await res.json();
+
+        showJdModal();
+        const roleInput = document.getElementById("jdModalRole");
+        const textInput = document.getElementById("jdModalText");
+        const idInput = document.getElementById("jdModalId");
+        
+        if (roleInput) roleInput.value = `${jd.title} (Copy)`;
+        if (textInput) textInput.value = jd.description || "";
+        if (idInput) idInput.value = ""; // Create new entry
+        
+        document.getElementById("jdModalTitle").textContent = "Duplicate Job Description";
+        showMessage(`Duplicating "${jd.title}" — edit details and save.`, "info");
+    } catch (e) {
+        showMessage(`Failed to duplicate: ${e.message}`, "error");
+    }
+}
+
+async function viewJdMatches(jdId, jdTitle) {
+    const modal = document.getElementById("jdMatchesModalOverlay");
+    const body = document.getElementById("jdMatchesModalBody");
+    const title = document.getElementById("jdMatchesModalTitle");
+    if (!modal || !body) return;
+
+    if (title) title.textContent = `Top Matches — ${jdTitle}`;
+    body.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="spinner" style="margin:0 auto 8px;"></div>Finding matching candidates...</td></tr>`;
+    modal.hidden = false;
+
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/job-descriptions/${jdId}/matches`);
+        if (!res.ok) throw new Error("Failed to fetch matches");
+        const results = await res.json();
+
+        if (!results || results.length === 0) {
+            body.innerHTML = `<tr><td colspan="7" class="empty-state">No matching candidates in the pool yet.</td></tr>`;
+            return;
         }
-    });
 
-    // Close modals on Escape key
-    window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            candidateModal.classList.remove('active');
-            comparisonModal.classList.remove('active');
-        }
-    });
+        body.innerHTML = "";
+        results.slice(0, 15).forEach(c => {
+            const score = Math.round(c.score || 0);
+            const scoreClass = score >= 75 ? "high" : score >= 45 ? "medium" : "low";
+            const skills = (c.matching_skills || []).slice(0, 4).map(s => `<span class="matching-skill-tag">${escapeHtml(s)}</span>`).join("");
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td class="candidate-name-cell" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">${escapeHtml(c.candidate_name)}</td>
+                <td>${escapeHtml(c.current_role || "—")}</td>
+                <td>${c.years_of_experience} yrs</td>
+                <td><span class="score-badge ${scoreClass}">${score}%</span></td>
+                <td>${escapeHtml(c.uploaded_by || "—")}</td>
+                <td>${skills || "—"}</td>
+                <td>
+                    <button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">Profile</button>
+                </td>
+            `;
+            body.appendChild(tr);
+        });
+    } catch (e) {
+        body.innerHTML = `<tr><td colspan="7" class="empty-state error-text">Error loading matches: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+// ─── Generated CV Actions ──────────────────────────
+
+async function deleteGeneratedCv(candidateId) {
+    if (!confirm("Are you sure you want to permanently delete this generated CV? The candidate profile will remain, but the formatted client CV will be deleted.")) return;
+    try {
+        const res = await authedFetch(`${getApiBase()}/api/generated-cvs/${candidateId}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("Failed to delete generated CV");
+        showMessage("Generated CV deleted successfully.", "info");
+        await fetchGeneratedCvs();
+    } catch (e) {
+        showMessage(`Delete failed: ${e.message}`, "error");
+    }
 }

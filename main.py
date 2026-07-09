@@ -33,7 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend"))
 
 # Protect /dashboard endpoint specifically, before mounting StaticFiles
 @app.get("/dashboard")

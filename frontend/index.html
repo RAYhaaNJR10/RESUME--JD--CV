@@ -1,259 +1,892 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Recruiter AI Workspace</title>
-    <!-- Google Fonts: Outfit -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- FontAwesome for icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ATS Recruitment Platform</title>
+    <meta name="description" content="Internal ATS recruitment platform for managing candidates, job descriptions, and CV generation.">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="app-container">
-        <!-- LEFT WORKFLOW SIDEBAR -->
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <div class="logo">
-                    <i class="fa-solid fa-wand-magic-sparkles logo-icon"></i>
-                    <span>Recruiter AI</span>
-                </div>
-                <span class="badge badge-accent">v1.2</span>
+<div class="app-container">
+
+    <!-- ═══════════════════════════════════════════
+         SIDEBAR
+    ═══════════════════════════════════════════ -->
+    <aside class="sidebar" id="appSidebar">
+        <div class="sidebar-header">
+            <div class="logo-area">
+                <div class="logo-icon-wrap">💼</div>
+                <span>ATS Recruit</span>
             </div>
+            <button type="button" class="sidebar-toggle" id="sidebarToggle" title="Toggle Sidebar">◀</button>
+        </div>
 
-            <div class="sidebar-scroll">
-                <!-- SECTION 1: CANDIDATE RESUMES -->
-                <section class="sidebar-section">
-                    <div class="section-title">
-                        <span class="step-num">1</span>
-                        <h3>Candidate Resumes</h3>
-                    </div>
-                    <p class="section-desc">Upload multiple PDF/DOCX resumes to parse & index them.</p>
-                    
-                    <div class="dropzone" id="resumes-dropzone">
-                        <input type="file" id="resumes-input" multiple accept=".pdf,.docx" hidden>
-                        <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
-                        <p class="drop-text">Drag & drop files or <span>browse</span></p>
-                        <span class="file-limits">PDF, DOCX formats supported</span>
-                    </div>
+        <nav class="sidebar-menu">
+            <a href="#dashboard" class="menu-item active" data-page="dashboard">
+                <span class="menu-icon">🏠</span>
+                <span class="menu-label">Dashboard</span>
+            </a>
+            <a href="#new-recruitment" class="menu-item menu-item-primary" data-page="new-recruitment">
+                <span class="menu-icon">🚀</span>
+                <span class="menu-label">New Recruitment</span>
+            </a>
 
-                    <div id="resumes-status" class="status-panel">
-                        <div class="status-header">
-                            <span class="status-title"><i class="fa-solid fa-circle-nodes"></i> Upload Status</span>
-                            <span id="indexed-count" class="count-badge">0 candidates</span>
-                        </div>
-                        <ul id="upload-list" class="upload-list">
-                            <!-- Items added dynamically -->
-                        </ul>
-                    </div>
-                </section>
+            <div class="menu-divider"></div>
 
-                <!-- SECTION 2: CV TEMPLATE -->
-                <section class="sidebar-section">
-                    <div class="section-title">
-                        <span class="step-num">2</span>
-                        <h3>CV Formatting Template</h3>
-                    </div>
-                    <p class="section-desc">Upload a custom DOCX template for client CV generation.</p>
+            <a href="#candidate-pool" class="menu-item" data-page="candidate-pool">
+                <span class="menu-icon">👥</span>
+                <span class="menu-label">Candidate Pool</span>
+            </a>
+            <a href="#job-descriptions" class="menu-item" data-page="job-descriptions">
+                <span class="menu-icon">📄</span>
+                <span class="menu-label">Job Descriptions</span>
+            </a>
+            <a href="#generated-cvs" class="menu-item" data-page="generated-cvs">
+                <span class="menu-icon">📁</span>
+                <span class="menu-label">Generated CVs</span>
+            </a>
 
-                    <div class="dropzone-mini" id="template-dropzone">
-                        <input type="file" id="template-input" accept=".docx" hidden>
-                        <i class="fa-solid fa-file-word template-icon"></i>
-                        <p class="drop-text">Upload template (.docx) or <span>browse</span></p>
-                    </div>
+            <div class="menu-divider"></div>
 
-                    <div class="active-template-card" id="template-status">
-                        <div class="template-info">
-                            <i class="fa-solid fa-circle-check active-icon"></i>
-                            <div>
-                                <h4 id="active-template-name">Default CV Format</h4>
-                                <span id="active-template-date">Using built-in styling</span>
-                            </div>
-                        </div>
-                        <button id="delete-template-btn" class="btn-icon" title="Reset to default template" style="display: none;">
-                            <i class="fa-solid fa-trash-can"></i>
+            <a href="#analytics" class="menu-item" data-page="analytics">
+                <span class="menu-icon">📊</span>
+                <span class="menu-label">Analytics</span>
+            </a>
+            <a href="#settings" class="menu-item" data-page="settings">
+                <span class="menu-icon">⚙️</span>
+                <span class="menu-label">Settings</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="recruiter-badge">
+                <div class="badge-avatar">👤</div>
+                <div class="badge-info">
+                    <div class="badge-name" id="loggedInUsername">Recruiter</div>
+                    <div class="badge-role">ATS Recruiter</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ═══════════════════════════════════════════
+         MAIN SHELL
+    ═══════════════════════════════════════════ -->
+    <main class="main-shell">
+
+        <!-- Top Navigation Bar -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <nav class="breadcrumbs" aria-label="Page breadcrumb">
+                    <span class="breadcrumb-item">Platform</span>
+                    <span class="breadcrumb-separator">/</span>
+                    <span class="breadcrumb-item active" id="activePageBreadcrumb">Dashboard</span>
+                </nav>
+            </div>
+            <div class="topbar-right">
+                <label class="api-control" title="API Base URL">
+                    <span>API</span>
+                    <input id="apiBase" type="url" value="" aria-label="API base URL">
+                </label>
+                <button id="logoutBtn" type="button" class="btn btn-ghost compact-btn">Logout</button>
+            </div>
+        </header>
+
+        <!-- Global Alert -->
+        <div id="alertBox" class="alert-box" hidden role="alert"></div>
+
+        <!-- ═══════════════════════════════════════════
+             PAGE VIEWS
+        ═══════════════════════════════════════════ -->
+        <div class="page-content">
+
+            <!-- ──────────────────────────────────────
+                 1. DASHBOARD
+            ────────────────────────────────────── -->
+            <section id="page-dashboard" class="page-view active">
+                <div class="page-header">
+                    <div>
+                        <h1>Dashboard</h1>
+                        <p>Welcome back. Here's an overview of your recruitment activity.</p>
+                    </div>
+                    <div class="action-row">
+                        <button type="button" class="btn btn-primary" onclick="switchView('new-recruitment'); window.location.hash='new-recruitment'">
+                            🚀 Start New Recruitment
                         </button>
                     </div>
-                </section>
+                </div>
 
-                <!-- SECTION 3: JOB DESCRIPTION -->
-                <section class="sidebar-section">
-                    <div class="section-title">
-                        <span class="step-num">3</span>
-                        <h3>Job Description</h3>
-                    </div>
-                    <p class="section-desc">Specify the target JD to score candidates against.</p>
-
-                    <div class="jd-tabs">
-                        <button class="jd-tab active" data-tab="text">Paste JD</button>
-                        <button class="jd-tab" data-tab="upload">Upload JD File</button>
-                    </div>
-
-                    <div id="jd-text-container" class="jd-tab-content active">
-                        <textarea id="jd-textarea" placeholder="Paste the Job Description here (skills, qualifications, responsibilities)..."></textarea>
-                    </div>
-
-                    <div id="jd-upload-container" class="jd-tab-content">
-                        <div class="dropzone-mini" id="jd-dropzone">
-                            <input type="file" id="jd-input" accept=".pdf,.docx,.txt" hidden>
-                            <i class="fa-solid fa-file-invoice jd-icon"></i>
-                            <p class="drop-text">Upload JD file (.pdf, .docx, .txt) or <span>browse</span></p>
+                <!-- Metrics -->
+                <div class="metrics-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:20px; margin-bottom:24px;">
+                    <div class="card" style="margin-bottom:0; display:flex; align-items:center; padding:20px; gap:16px;">
+                        <div class="badge-avatar" style="width:48px; height:48px; font-size:24px; background:#e0e7ff; color:#4f46e5;">👤</div>
+                        <div>
+                            <span style="font-size:12px; font-weight:600; color:var(--text-secondary);">Uploaded By Me</span>
+                            <h3 style="font-size:24px; font-weight:800; color:var(--text-primary);" id="statMyCandidates">—</h3>
                         </div>
                     </div>
-                </section>
-            </div>
-        </aside>
-
-        <!-- MAIN WORKSPACE -->
-        <main class="workspace">
-            <!-- HEADER -->
-            <header class="workspace-header">
-                <div class="workspace-title">
-                    <h1>Recruiter Dashboard</h1>
-                    <p>Screen resumes, compare matching candidates semantically, and generate polished client-facing CVs.</p>
-                </div>
-                <div class="quick-stats-container">
-                    <div class="quick-stats">
-                        <div class="stat-card">
-                            <span class="stat-label">Total Indexed</span>
-                            <span id="stat-total-candidates" class="stat-value">0</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">New Candidates</span>
-                            <span id="stat-new-candidates" class="stat-value">0</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">Updated Candidates</span>
-                            <span id="stat-updated-candidates" class="stat-value">0</span>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-label">Selected</span>
-                            <span id="stat-selected-count" class="stat-value">0</span>
+                    <div class="card" style="margin-bottom:0; display:flex; align-items:center; padding:20px; gap:16px;">
+                        <div class="badge-avatar" style="width:48px; height:48px; font-size:24px; background:#f3e8ff; color:#a855f7;">👥</div>
+                        <div>
+                            <span style="font-size:12px; font-weight:600; color:var(--text-secondary);">Total Candidate Pool</span>
+                            <h3 style="font-size:24px; font-weight:800; color:var(--text-primary);" id="statTotalCandidates">—</h3>
                         </div>
                     </div>
-                    <button id="reset-stats-btn" class="btn-reset-stats" title="Resets only the upload session counters.&#10;Your candidate database and embeddings remain unchanged.">
-                        <i class="fa-solid fa-arrow-rotate-left"></i> Reset Upload Statistics
-                    </button>
-                </div>
-
-            </header>
-
-            <!-- ACTION BAR -->
-            <div class="action-bar">
-                <div class="action-group">
-                    <button id="rank-btn" class="btn btn-primary">
-                        <i class="fa-solid fa-ranking-star"></i> Rank Candidates
-                    </button>
-                    <button id="compare-btn" class="btn btn-secondary" disabled>
-                        <i class="fa-solid fa-users-viewfinder"></i> Compare Selected
-                    </button>
-                </div>
-                <button id="generate-cvs-btn" class="btn btn-success" disabled>
-                    <i class="fa-solid fa-file-zipper"></i> Generate Selected CVs
-                </button>
-            </div>
-
-            <!-- CONTENT CARD -->
-            <div class="card workspace-card">
-                <div class="candidates-header">
-                    <h2>Ranked Matching Results</h2>
-                    <div class="candidates-actions">
-                        <span id="matching-summary" class="summary-text">Ready to match candidates. Enter a JD above and click Rank.</span>
-                        <button id="select-all-btn" class="btn-link" style="display: none;">Select All</button>
+                    <div class="card" style="margin-bottom:0; display:flex; align-items:center; padding:20px; gap:16px;">
+                        <div class="badge-avatar" style="width:48px; height:48px; font-size:24px; background:#d1fae5; color:#10b981;">📄</div>
+                        <div>
+                            <span style="font-size:12px; font-weight:600; color:var(--text-secondary);">Active Job Descriptions</span>
+                            <h3 style="font-size:24px; font-weight:800; color:var(--text-primary);" id="statActiveJds">—</h3>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-bottom:0; display:flex; align-items:center; padding:20px; gap:16px;">
+                        <div class="badge-avatar" style="width:48px; height:48px; font-size:24px; background:#ffedd5; color:#f97316;">📁</div>
+                        <div>
+                            <span style="font-size:12px; font-weight:600; color:var(--text-secondary);">Generated CVs</span>
+                            <h3 style="font-size:24px; font-weight:800; color:var(--text-primary);" id="statGeneratedCvs">—</h3>
+                        </div>
                     </div>
                 </div>
 
-                <!-- LOADING OVERLAY -->
-                <div id="loading-overlay" class="loading-overlay" style="display: none;">
-                    <div class="spinner"></div>
-                    <p id="loading-text">Processing...</p>
-                </div>
-
-                <!-- NO RESULTS / EMPTY STATE -->
-                <div id="empty-state" class="empty-state">
-                    <div class="empty-icon-wrapper">
-                        <i class="fa-solid fa-magnifying-glass-chart"></i>
+                <div class="dashboard-layout" style="display:grid; grid-template-columns: 2fr 1fr; gap:24px;">
+                    <!-- Quick Actions -->
+                    <div class="card">
+                        <div class="card-header"><h2>Quick Actions</h2></div>
+                        <div class="card-body">
+                            <div class="quick-actions-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                <button type="button" class="btn btn-secondary" style="height:80px; flex-direction:column; gap:4px; align-items:flex-start;" onclick="switchView('new-recruitment'); window.location.hash='new-recruitment'">
+                                    <span style="font-size:20px;">🚀</span>
+                                    <span style="font-weight:700;">New Recruitment</span>
+                                </button>
+                                <button type="button" class="btn btn-secondary" style="height:80px; flex-direction:column; gap:4px; align-items:flex-start;" onclick="switchView('candidate-pool'); window.location.hash='candidate-pool'">
+                                    <span style="font-size:20px;">🔍</span>
+                                    <span style="font-weight:700;">Search Talent Pool</span>
+                                </button>
+                                <button type="button" class="btn btn-secondary" style="height:80px; flex-direction:column; gap:4px; align-items:flex-start;" onclick="switchView('job-descriptions'); window.location.hash='job-descriptions'">
+                                    <span style="font-size:20px;">📄</span>
+                                    <span style="font-weight:700;">Job Descriptions</span>
+                                </button>
+                                <button type="button" class="btn btn-secondary" style="height:80px; flex-direction:column; gap:4px; align-items:flex-start;" onclick="switchView('generated-cvs'); window.location.hash='generated-cvs'">
+                                    <span style="font-size:20px;">📁</span>
+                                    <span style="font-weight:700;">Generated CVs</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
-                    <h3>No candidates matched yet</h3>
-                    <p>Upload candidate resumes in the sidebar, paste/upload a job description, and click "Rank Candidates" to begin scanning.</p>
-                </div>
 
-                <!-- CANDIDATE LIST -->
-                <div id="candidates-container" class="candidates-container" style="display: none;">
-                    <table class="candidates-table">
-                        <thead>
-                            <tr>
-                                <th width="40"><input type="checkbox" id="master-checkbox"></th>
-                                <th>Candidate</th>
-                                <th>Current Role</th>
-                                <th width="150">Experience</th>
-                                <th width="140" style="text-align: right;">Similarity Score</th>
-                                <th width="100" style="text-align: center;">Details</th>
-                            </tr>
-                        </thead>
-                        <tbody id="candidates-tbody">
-                            <!-- Rows added dynamically -->
-                        </tbody>
-                    </table>
+                    <!-- CV Template -->
+                    <div class="card">
+                        <div class="card-header"><h2>CV Formatting Template</h2></div>
+                        <div class="card-body">
+                            <div id="templateDropzone" class="dropzone dropzone-sm">
+                                <div class="dropzone-inner">
+                                    <span class="upload-icon">📄</span>
+                                    <p style="font-weight:600; font-size:12.5px;">Drop DOCX template here</p>
+                                    <span class="file-hint">Word Document (.docx)</span>
+                                </div>
+                                <input id="templateFileInput" type="file" accept=".docx" hidden>
+                            </div>
+                            <div id="activeTemplateDisplay" class="active-template-card" hidden>
+                                <div class="template-info">
+                                    <span class="file-icon">📝</span>
+                                    <span id="activeTemplateName" class="file-name">template.docx</span>
+                                </div>
+                                <button id="removeTemplateBtn" type="button" class="remove-btn" title="Remove template">×</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </main>
-    </div>
+            </section>
 
-    <!-- CANDIDATE PROFILE MODAL -->
-    <div id="candidate-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title-wrapper">
-                    <div class="modal-avatar" id="modal-candidate-avatar">U</div>
+            <!-- ──────────────────────────────────────
+                 2. NEW RECRUITMENT (Primary Workflow)
+            ────────────────────────────────────── -->
+            <section id="page-new-recruitment" class="page-view">
+                <div class="page-header">
                     <div>
-                        <h2 id="modal-candidate-name">Candidate Name</h2>
-                        <p id="modal-candidate-role">Current Role Title</p>
+                        <h1>New Recruitment</h1>
+                        <p>Complete candidate lifecycle workflow: upload, parse, choose job description, match, compare, and generate client-ready CVs.</p>
+                    </div>
+                    <div class="action-row">
+                        <button type="button" class="btn btn-ghost" id="nrResetBtn">↺ Restart Flow</button>
                     </div>
                 </div>
-                <button class="close-modal-btn" id="close-candidate-modal"><i class="fa-solid fa-xmark"></i></button>
+
+                <!-- Step Progress Indicator -->
+                <div class="step-indicator" id="nrStepIndicator">
+                    <div class="step-item active" id="nrStep1Indicator">
+                        <div class="step-circle">1</div>
+                        <span class="step-label">Upload Resumes</span>
+                    </div>
+                    <div class="step-connector" id="nrConn1"></div>
+                    <div class="step-item" id="nrStep2Indicator">
+                        <div class="step-circle">2</div>
+                        <span class="step-label">Processing</span>
+                    </div>
+                    <div class="step-connector" id="nrConn2"></div>
+                    <div class="step-item" id="nrStep3Indicator">
+                        <div class="step-circle">3</div>
+                        <span class="step-label">Job Description</span>
+                    </div>
+                    <div class="step-connector" id="nrConn3"></div>
+                    <div class="step-item" id="nrStep4Indicator">
+                        <div class="step-circle">4</div>
+                        <span class="step-label">Candidate Ranking</span>
+                    </div>
+                    <div class="step-connector" id="nrConn4"></div>
+                    <div class="step-item" id="nrStep5Indicator">
+                        <div class="step-circle">5</div>
+                        <span class="step-label">Generate CVs</span>
+                    </div>
+                </div>
+
+                <!-- ── STEP 1: Upload ── -->
+                <div class="nr-step" id="nrStep1">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>1 — Upload Candidate Resumes</h2>
+                        </div>
+                        <div class="card-body">
+                            <div id="nrDropzone" class="dropzone">
+                                <div class="dropzone-inner">
+                                    <span class="upload-icon">📁</span>
+                                    <p style="font-weight:700; font-size:14px; color:var(--text-primary);">Drag &amp; drop resumes here, or click to choose</p>
+                                    <span class="file-hint">Supported formats: PDF, DOCX (up to 20 files at once)</span>
+                                </div>
+                                <input id="nrFileInput" type="file" multiple accept=".pdf,.docx" hidden>
+                            </div>
+
+                            <!-- Upload progress container -->
+                            <div id="nrUploadProgressContainer" style="display:none; margin-top:16px;">
+                                <div class="file-row" style="margin-bottom:6px;">
+                                    <span style="font-weight:600; font-size:12.5px;">Uploading Resumes...</span>
+                                    <span id="nrUploadProgressPercent" style="font-weight:700; color:var(--primary);">0%</span>
+                                </div>
+                                <div class="ai-score-bar" style="width:100%; height:8px;"><div id="nrUploadProgressBarFill" class="ai-score-bar-fill high" style="width:0%"></div></div>
+                            </div>
+
+                            <!-- Queued files list -->
+                            <div id="nrFileList" class="nr-file-list" style="display:none;"></div>
+
+                            <!-- Candidate Source Selection -->
+                            <div class="source-selection-card" id="nrSourceCard">
+                                <h3 class="source-title">Candidate Source</h3>
+                                <p class="source-desc">Specify whether to combine newly uploaded resumes with candidates in the pool, or evaluate newly uploaded resumes exclusively.</p>
+                                <div class="source-options">
+                                    <label class="source-option" id="nrSourcePoolLabel">
+                                        <input type="checkbox" id="nrIncludePool" checked>
+                                        <div class="source-option-content">
+                                            <span class="source-option-title">Include candidates from Candidate Pool</span>
+                                            <span class="source-option-desc">Evaluate the new resumes alongside previously parsed profiles</span>
+                                        </div>
+                                    </label>
+                                    <div class="source-sub-options" id="nrPoolSubOptions">
+                                        <label class="source-radio">
+                                            <input type="radio" name="nrPoolScope" value="all" id="nrScopeAll" checked>
+                                            <span>Include all existing candidates</span>
+                                        </label>
+                                        <label class="source-radio">
+                                            <input type="radio" name="nrPoolScope" value="my" id="nrScopeMy">
+                                            <span>Include only my uploaded candidates</span>
+                                        </label>
+                                    </div>
+                                    <label class="source-option">
+                                        <input type="checkbox" id="nrOnlyNew">
+                                        <div class="source-option-content">
+                                            <span class="source-option-title">Only use newly uploaded resumes</span>
+                                            <span class="source-option-desc">Ignore all previously parsed profiles in the Candidate Pool</span>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="nr-action-row" style="margin-top:20px; display:flex; align-items:center; gap:16px;">
+                                <button type="button" class="btn btn-primary btn-lg" id="nrUploadBtn" disabled>
+                                    Upload &amp; Parse Resumes
+                                </button>
+                                <span class="nr-action-hint" id="nrUploadHint" style="color:var(--text-secondary); font-size:13px;">Select files to unlock parsing</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── STEP 2: Processing ── -->
+                <div class="nr-step" id="nrStep2" style="display:none;">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>2 — Resume Processing Pipeline</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="processing-checklist" id="nrChecklist">
+                                <div class="checklist-item" id="chk-upload">
+                                    <div class="chk-icon">⏳</div>
+                                    <div class="chk-content">
+                                        <span class="chk-title">Upload Complete</span>
+                                        <span class="chk-desc" id="chkUploadDesc">Uploading files to the secure server...</span>
+                                    </div>
+                                </div>
+                                <div class="checklist-item" id="chk-dup">
+                                    <div class="chk-icon">⏳</div>
+                                    <div class="chk-content">
+                                        <span class="chk-title">Duplicate Detection</span>
+                                        <span class="chk-desc" id="chkDupDesc">Checking database for email, phone and name matches...</span>
+                                    </div>
+                                </div>
+                                <div class="checklist-item" id="chk-parse">
+                                    <div class="chk-icon">⏳</div>
+                                    <div class="chk-content">
+                                        <span class="chk-title">Parsing</span>
+                                        <span class="chk-desc" id="chkParseDesc">AI parsing candidate profiles using OpenAI JSON schema...</span>
+                                    </div>
+                                </div>
+                                <div class="checklist-item" id="chk-embed">
+                                    <div class="chk-icon">⏳</div>
+                                    <div class="chk-content">
+                                        <span class="chk-title">Embedding Generation</span>
+                                        <span class="chk-desc" id="chkEmbedDesc">Creating vectors and index keys for semantic matcher...</span>
+                                    </div>
+                                </div>
+                                <div class="checklist-item" id="chk-save">
+                                    <div class="chk-icon">⏳</div>
+                                    <div class="chk-content">
+                                        <span class="chk-title">Candidate Saved</span>
+                                        <span class="chk-desc" id="chkSaveDesc">Saving details and document structures to database...</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Summary stats -->
+                            <div class="processing-summary" id="nrProcessingSummary" style="display:none;">
+                                <div class="proc-stat success">
+                                    <span class="proc-stat-value" id="procStatUploaded">0</span>
+                                    <span class="proc-stat-label">Uploaded</span>
+                                </div>
+                                <div class="proc-stat success">
+                                    <span class="proc-stat-value" id="procStatParsed">0</span>
+                                    <span class="proc-stat-label">Parsed &amp; Saved</span>
+                                </div>
+                                <div class="proc-stat warning">
+                                    <span class="proc-stat-value" id="procStatDupes">0</span>
+                                    <span class="proc-stat-label">Duplicates Skipped</span>
+                                </div>
+                                <div class="proc-stat danger">
+                                    <span class="proc-stat-value" id="procStatFailed">0</span>
+                                    <span class="proc-stat-label">Failed</span>
+                                </div>
+                                <div class="proc-stat info">
+                                    <span class="proc-stat-value" id="procStatTime">0.0s</span>
+                                    <span class="proc-stat-label">Total Time</span>
+                                </div>
+                            </div>
+
+                            <!-- Parsed candidates list -->
+                            <div id="nrParsedList" style="display:none; margin-top:16px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── STEP 3: Job Description ── -->
+                <div class="nr-step" id="nrStep3" style="display:none;">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>3 — Select Job Description</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="jd-input-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
+                                <div class="form-group">
+                                    <label class="form-label" for="nrJdSelect">Option A — Choose Saved Job Description</label>
+                                    <select class="filter-select" id="nrJdSelect" style="width:100%; height:42px;">
+                                        <option value="">-- Choose a saved Job Description --</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Option B — Upload JD file (PDF/DOCX)</label>
+                                    <div class="file-row" style="display:flex; gap:8px;">
+                                        <input id="nrJdFile" type="file" accept=".pdf,.docx,.txt" class="form-input-file" style="flex:1;">
+                                        <button id="nrExtractJdBtn" type="button" class="btn btn-secondary compact-btn">Extract Text</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin-top:16px;">
+                                <label class="form-label" for="nrJdText">Option C — Paste Job Description Text</label>
+                                <textarea id="nrJdText" class="form-textarea" placeholder="Paste the target job description details here..." style="min-height:160px;"></textarea>
+                            </div>
+                            <div class="nr-action-row" style="display:flex; align-items:center; gap:16px;">
+                                <button type="button" class="btn btn-primary btn-lg" id="nrRankBtn">
+                                    Rank Candidates
+                                </button>
+                                <span class="nr-action-hint" style="color:var(--text-secondary);">Sorts candidates semantically against the job requirements</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── STEP 4: Ranked Results ── -->
+                <div class="nr-step" id="nrStep4" style="display:none;">
+                    <div class="card">
+                        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                            <h2>4 — Candidate Ranking <span id="nrRankCount" class="jd-matches-count"></span></h2>
+                            <div id="nrRankSelectionActions" class="selection-actions" hidden style="display:flex; gap:8px;">
+                                <button type="button" class="btn btn-secondary compact-btn" id="nrCompareBtn" disabled>Compare Selected</button>
+                                <button type="button" class="btn btn-primary compact-btn" id="nrGenerateBtn" disabled>Generate CVs ›</button>
+                            </div>
+                        </div>
+                        <div class="card-body" style="padding:0;">
+                            <div class="table-wrap" style="border:0; border-radius:0;">
+                                <table id="nrRankTable">
+                                    <thead>
+                                        <tr>
+                                            <th class="checkbox-col"><input type="checkbox" id="nrCheckAll"></th>
+                                            <th style="width:140px">Candidate Name</th>
+                                            <th style="width:140px">Current Role</th>
+                                            <th style="width:70px">Exp.</th>
+                                            <th style="width:90px">Match Score</th>
+                                            <th style="width:90px">Source</th>
+                                            <th style="width:90px">Uploaded By</th>
+                                            <th style="width:180px">Top Matching Skills</th>
+                                            <th style="width:180px">Missing Skills</th>
+                                            <th>Assessment Summary</th>
+                                            <th style="width:150px">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="nrRankBody">
+                                        <tr><td colspan="11" class="empty-state">Choose a job description and click Rank Candidates.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── STEP 5: Generate CVs ── -->
+                <div class="nr-step" id="nrStep5" style="display:none;">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>5 — Generate Client CVs</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="generate-summary" id="nrGenerateSummary" style="margin-bottom:16px;">
+                                <p style="font-size:14px;">Generating client-ready resumes for <strong id="nrGenerateCount">0</strong> selected candidates...</p>
+                            </div>
+                            <div id="nrGenerateProgress" class="generate-progress" style="margin-bottom:16px;">
+                                <div class="spinner"></div>
+                                <span style="font-weight:600;">OpenAI is translating profiles into the client format...</span>
+                            </div>
+                            <div id="nrGenerateResult" style="display:none;">
+                                <div class="generate-success-card" style="margin-bottom:20px;">
+                                    <span class="generate-success-icon">✅</span>
+                                    <div>
+                                        <strong style="color:var(--success-strong); font-size:15px;">CVs Generated Successfully</strong>
+                                        <p id="nrGenerateResultDesc" style="color:var(--text-secondary); font-size:13px; margin-top:4px;">ZIP file containing Word Documents is ready.</p>
+                                    </div>
+                                </div>
+                                <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                                    <a id="nrDownloadLink" class="btn btn-primary" href="#" download>⬇ Download ZIP Package</a>
+                                    <button type="button" class="btn btn-secondary" id="nrStartOverBtn">Start Over</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ──────────────────────────────────────
+                 3. CANDIDATE POOL
+            ────────────────────────────────────── -->
+            <section id="page-candidate-pool" class="page-view">
+                <div class="page-header">
+                    <div>
+                        <h1>Candidate Pool</h1>
+                        <p>Discover candidate profiles semantically using AI embeddings. Paste a Job Description or enter a natural language hiring query.</p>
+                    </div>
+                </div>
+
+                <!-- AI Semantic Search -->
+                <div class="ai-search-card" style="margin-bottom: 24px;">
+                    <div class="ai-search-header">
+                        <div class="ai-search-title-row">
+                            <span class="ai-badge">✦ AI</span>
+                            <h2 class="ai-search-title">Semantic Candidate Search</h2>
+                        </div>
+                        <p class="ai-search-subtitle">The AI uses existing FAISS embeddings to discover skills, roles, and profiles semantically.</p>
+                    </div>
+                    <div class="ai-search-input-row" style="flex-direction: column; align-items: stretch; gap: 12px;">
+                        <div class="ai-input-wrapper" style="height: auto;">
+                            <span class="ai-input-icon" style="top: 24px; transform: translateY(-50%);">🔍</span>
+                            <textarea id="poolSearchInput" class="ai-query-input" 
+                                      placeholder="Paste a Job Description or enter a hiring query (e.g., 'Backend developer with FastAPI', 'Python developer with Docker', 'Senior Data Engineer')..." 
+                                      style="width: 100%; min-height: 120px; padding: 12px 12px 12px 40px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.08); color: var(--text-primary); font-family: inherit; font-size: 14px; resize: vertical;" 
+                                      autocomplete="off"></textarea>
+                        </div>
+                        <div style="display: flex; justify-content: flex-end; gap: 12px;">
+                            <button type="button" id="poolClearSearchBtn" class="btn btn-ghost" style="padding: 0 16px;">✕ Clear</button>
+                            <button type="button" id="poolSearchBtn" class="btn btn-primary" style="padding: 0 24px; height: 42px;">
+                                ✦ Search Candidates
+                            </button>
+                        </div>
+                    </div>
+                    <div class="ai-search-examples">
+                        <span class="ai-example-label">Examples:</span>
+                        <button type="button" class="ai-example-chip" onclick="setPoolSearchQuery('Backend developer with FastAPI')">Backend developer with FastAPI</button>
+                        <button type="button" class="ai-example-chip" onclick="setPoolSearchQuery('Python developer with Docker')">Python developer with Docker</button>
+                        <button type="button" class="ai-example-chip" onclick="setPoolSearchQuery('Senior Data Engineer')">Senior Data Engineer</button>
+                    </div>
+                </div>
+
+                <!-- Results Section -->
+                <div class="card table-card" style="margin-bottom: 24px;">
+                    <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h2>Ranked Candidates <span id="poolResultCount" class="jd-matches-count"></span></h2>
+                        </div>
+                        <div class="action-row" id="poolSelectionActions" hidden style="display:flex; gap:8px;">
+                            <button id="poolCompareBtn" type="button" class="btn btn-secondary compact-btn" disabled>Compare Selected</button>
+                            <button id="poolGenerateCvsBtn" type="button" class="btn btn-primary compact-btn" disabled>Generate Client CVs</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width:50px; text-align:center;">#</th>
+                                    <th>Candidate Name</th>
+                                    <th>Current Role</th>
+                                    <th style="width:80px">Exp.</th>
+                                    <th style="width:110px">Uploaded By</th>
+                                    <th style="width:130px" id="poolScoreHeader">Match Score</th>
+                                    <th>Top Skills</th>
+                                    <th id="poolMissingHeader">Missing Skills</th>
+                                    <th style="width:70px; text-align:center;"><input type="checkbox" id="poolCheckAllCompare" style="cursor:pointer;" title="Select all for comparison"><br><span style="font-size:10px; font-weight:normal;">Compare</span></th>
+                                    <th style="width:70px; text-align:center;"><input type="checkbox" id="poolCheckAllGenerate" style="cursor:pointer;" title="Select all for CV generation"><br><span style="font-size:10px; font-weight:normal;">Gen CV</span></th>
+                                    <th style="width:100px; text-align:center;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="poolTableBody">
+                                <tr><td colspan="11" class="empty-state">Loading candidates...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- Pagination -->
+                    <div id="poolPagination" style="display:flex; align-items:center; justify-content:space-between; padding:12px 4px; margin-top:4px; font-size:13px; color:var(--text-secondary);" hidden>
+                        <span id="poolPaginationInfo">Showing 1–20 of 0 candidates</span>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <button id="poolPrevBtn" type="button" class="btn btn-secondary compact-btn" disabled>← Prev</button>
+                            <span id="poolPageNumbers" style="display:flex; gap:4px;"></span>
+                            <button id="poolNextBtn" type="button" class="btn btn-secondary compact-btn" disabled>Next →</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ──────────────────────────────────────
+                 4. JOB DESCRIPTIONS
+            ────────────────────────────────────── -->
+            <section id="page-job-descriptions" class="page-view">
+                <div class="page-header">
+                    <div>
+                        <h1>Job Descriptions</h1>
+                        <p>Create, duplicate, edit, and evaluate talent pools against job description matrices.</p>
+                    </div>
+                    <button id="addJdBtn" type="button" class="btn btn-primary">+ Add Job Description</button>
+                </div>
+
+                <div class="jd-grid" id="jdsContainer">
+                    <div class="skeleton-card"></div>
+                    <div class="skeleton-card"></div>
+                    <div class="skeleton-card"></div>
+                </div>
+
+                <!-- Add/Edit JD Modal -->
+                <div id="jdModalOverlay" class="modal-overlay" hidden>
+                    <div class="modal-dialog">
+                        <form id="jdForm">
+                            <input type="hidden" id="jdModalId" value="">
+                            <div class="modal-header">
+                                <h2 id="jdModalTitle" class="modal-title">Save Job Description</h2>
+                            </div>
+                            <div class="modal-body">
+                                <div class="form-group">
+                                    <label class="form-label" for="jdModalRole">Job Role Title</label>
+                                    <input class="form-input" type="text" id="jdModalRole" placeholder="e.g. Senior Python Developer" required>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Extract from File (Optional)</label>
+                                    <div class="file-row" style="display:flex; gap:8px;">
+                                        <input id="jdModalFile" type="file" accept=".pdf,.docx,.txt" style="flex:1;">
+                                        <button id="extractModalJdBtn" type="button" class="btn btn-secondary compact-btn">Extract</button>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="jdModalText">Job Description Text</label>
+                                    <textarea id="jdModalText" class="form-textarea" placeholder="Paste full JD specifications here..." required style="min-height:180px;"></textarea>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-ghost" id="jdModalCloseBtn">Cancel</button>
+                                <button type="submit" class="btn btn-primary" id="jdModalSaveBtn">Save Profile</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Job Description Matches Modal -->
+                <div id="jdMatchesModalOverlay" class="modal-overlay" hidden>
+                    <div class="modal-dialog" style="max-width:840px;">
+                        <div class="modal-header">
+                            <h2 id="jdMatchesModalTitle" class="modal-title">Matching Pool Candidates</h2>
+                        </div>
+                        <div class="modal-body" style="padding:0; max-height:480px; overflow-y:auto;">
+                            <div class="table-wrap" style="border:0; border-radius:0;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Candidate</th>
+                                            <th>Current Role</th>
+                                            <th>Experience</th>
+                                            <th>Match Score</th>
+                                            <th>Uploaded By</th>
+                                            <th>Top Matching Skills</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="jdMatchesModalBody">
+                                        <tr><td colspan="7" class="empty-state">Loading matches...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" id="jdMatchesModalCloseBtn">Close</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ──────────────────────────────────────
+                 5. GENERATED CVS
+            ────────────────────────────────────── -->
+            <section id="page-generated-cvs" class="page-view">
+                <div class="page-header">
+                    <div>
+                        <h1>Generated CVs</h1>
+                        <p>History log of tailored client CVs generated on the platform. Review, preview, or remove records here.</p>
+                    </div>
+                </div>
+
+                <div class="card table-card">
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Candidate Name</th>
+                                    <th>Job Description</th>
+                                    <th>Generated By</th>
+                                    <th>Generation Date</th>
+                                    <th style="width:280px">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="generatedCvsTableBody">
+                                <tr><td colspan="5" class="empty-state">Loading generated CV records...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ──────────────────────────────────────
+                 6. ANALYTICS
+            ────────────────────────────────────── -->
+            <section id="page-analytics" class="page-view">
+                <div class="page-header">
+                    <div>
+                        <h1>Analytics Dashboard</h1>
+                        <p>Real-time candidate metrics, talent distribution, and CV creation trends.</p>
+                    </div>
+                </div>
+
+                <div class="analytics-grid">
+                    <div class="card chart-card">
+                        <div class="card-header"><h2>Experience Distribution</h2></div>
+                        <div class="card-body chart-body" id="chartExperience"><div class="skeleton-chart"></div></div>
+                    </div>
+                    <div class="card chart-card">
+                        <div class="card-header"><h2>Top Skills Distribution</h2></div>
+                        <div class="card-body chart-body" id="chartSkills"><div class="skeleton-chart"></div></div>
+                    </div>
+                    <div class="card chart-card">
+                        <div class="card-header"><h2>Candidates by Recruiter</h2></div>
+                        <div class="card-body chart-body" id="chartRecruiters"><div class="skeleton-chart"></div></div>
+                    </div>
+                    <div class="card chart-card">
+                        <div class="card-header"><h2>Resume Upload Trends</h2></div>
+                        <div class="card-body chart-body" id="chartTrends"><div class="skeleton-chart"></div></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ──────────────────────────────────────
+                 7. settings
+            ────────────────────────────────────── -->
+            <section id="page-settings" class="page-view">
+                <div class="page-header">
+                    <div>
+                        <h1>Settings</h1>
+                        <p>Manage account security and authentication details.</p>
+                    </div>
+                </div>
+
+                <div class="settings-layout" style="max-width:640px;">
+                    <div class="card">
+                        <div class="card-header"><h2>My Account Profile</h2></div>
+                        <div class="card-body">
+                            <div class="profile-details-grid">
+                                <div class="detail-row"><span class="detail-label">Username:</span></div>
+                                <div class="detail-row"><strong id="settingsUsername">—</strong></div>
+                                <div class="detail-row"><span class="detail-label">Role:</span></div>
+                                <div class="detail-row"><span>ATS Administrator</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-top:20px;">
+                        <div class="card-header"><h2>Change Password</h2></div>
+                        <div class="card-body">
+                            <form id="changePasswordForm">
+                                <div class="form-group">
+                                    <label class="form-label" for="oldPassword">Current Password</label>
+                                    <input class="form-input" type="password" id="oldPassword" required placeholder="••••••••">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="newPassword">New Password</label>
+                                    <input class="form-input" type="password" id="newPassword" required placeholder="••••••••">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="confirmPassword">Confirm New Password</label>
+                                    <input class="form-input" type="password" id="confirmPassword" required placeholder="••••••••">
+                                </div>
+                                <button type="submit" class="btn btn-primary" id="changePasswordBtn">Update Password</button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-top:20px;">
+                        <div class="card-header"><h2>Logout Session</h2></div>
+                        <div class="card-body">
+                            <p style="color:var(--text-secondary); margin-bottom:16px;">Click below to terminate your session safely.</p>
+                            <button type="button" class="btn btn-danger" id="settingsLogoutBtn">Sign Out of Platform</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div><!-- /page-content -->
+    </main>
+</div><!-- /app-container -->
+
+<!-- ═══════════════════════════════════════════
+     OVERLAYS & MODALS (GLOBAL)
+═══════════════════════════════════════════ -->
+
+<!-- Candidate Profile Drawer -->
+<div id="candidateProfileDrawer" class="drawer-overlay" hidden>
+    <div class="drawer-content">
+        <div class="drawer-header">
+            <div>
+                <h2 id="drawerCandidateName">Candidate Name</h2>
+                <p class="drawer-meta" id="drawerCurrentRole" style="font-size:13px; color:var(--text-secondary); margin-top:2px;">—</p>
             </div>
-            <div class="modal-body">
-                <div id="profile-details-content">
-                    <!-- Profile details rendered dynamically -->
+            <button type="button" class="drawer-close-btn" id="closeDrawerBtn" title="Close">×</button>
+        </div>
+        <div class="drawer-body">
+            <!-- Contact Card -->
+            <div class="drawer-contact-card" style="display:grid; grid-template-columns:1fr 1fr; gap:10px 24px; padding:14px 16px; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:16px; font-size:13px;">
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Experience</span><br><span id="drawerYearsExp" style="color:var(--text-primary); font-weight:600;">—</span></div>
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Employee ID</span><br><span id="drawerEmployeeId" style="color:var(--text-primary);">—</span></div>
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">✉ Email</span><br><span id="drawerEmail" style="color:var(--accent);">—</span></div>
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">📞 Phone</span><br><span id="drawerPhone" style="color:var(--text-primary);">—</span></div>
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">📍 Location</span><br><span id="drawerLocation" style="color:var(--text-primary);">—</span></div>
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">Uploaded By</span><br><span id="drawerUploaderName" style="color:var(--text-primary);">—</span></div>
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">🔗 LinkedIn</span><br><span id="drawerLinkedIn" style="color:var(--accent);">—</span></div>
+                <div><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">🔗 GitHub</span><br><span id="drawerGitHub" style="color:var(--accent);">—</span></div>
+                <div style="grid-column:1/-1;"><span style="color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px;">📁 Resume</span><br><span id="drawerResumeName" style="color:var(--text-primary);">—</span>&nbsp;&nbsp;<a id="drawerResumeDownloadLink" class="btn btn-secondary compact-btn" href="#" download style="font-size:11px; padding:2px 10px;">Download</a></div>
+            </div>
+            <div class="drawer-tabs">
+                <button type="button" class="drawer-tab active" data-tab="tab-summary">About</button>
+                <button type="button" class="drawer-tab" data-tab="tab-experience">Experience</button>
+                <button type="button" class="drawer-tab" data-tab="tab-skills">Skills &amp; Projects</button>
+            </div>
+            <div class="drawer-tab-content">
+                <div id="tab-summary" class="drawer-pane active">
+                    <h3>Summary</h3>
+                    <p class="profile-about-text" id="drawerAbout" style="margin-bottom:16px; font-size:13.5px; color:var(--text-secondary);">Loading...</p>
+                    <h3>Education</h3>
+                    <div id="drawerEducation" class="education-container" style="display:flex; flex-direction:column; gap:12px; margin-top:8px; margin-bottom:16px;"></div>
+                </div>
+
+                <div id="tab-experience" class="drawer-pane">
+                    <h3>Professional Experience</h3>
+                    <div id="drawerExperienceTimeline" class="timeline-container" style="display:flex; flex-direction:column; gap:16px; margin-top:12px;"></div>
+                </div>
+                <div id="tab-skills" class="drawer-pane">
+                    <h3>Skills</h3>
+                    <div id="drawerSkillsTags" class="skills-tags-container" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; margin-bottom:20px;"></div>
+                    <h3>Projects</h3>
+                    <div id="drawerProjectsList" class="projects-list" style="display:flex; flex-direction:column; gap:16px; margin-top:8px;"></div>
                 </div>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- COMPARISON MODAL -->
-    <div id="comparison-modal" class="modal modal-large">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title-wrapper">
-                    <i class="fa-solid fa-users-viewfinder modal-header-icon"></i>
-                    <div>
-                        <h2>Candidate Comparison Matrix</h2>
-                        <p>Detailed side-by-side analysis of selected candidates against the Job Description.</p>
-                    </div>
-                </div>
-                <button class="close-modal-btn" id="close-comparison-modal"><i class="fa-solid fa-xmark"></i></button>
+<!-- Delete Confirmation Modal -->
+<div id="deleteModalOverlay" class="modal-overlay" hidden>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+        <div class="modal-header">
+            <h2 id="deleteModalTitle" class="modal-title">Confirm Permanent Deletion</h2>
+        </div>
+        <div class="modal-body">
+            <p id="deleteModalSummary" class="modal-summary">Are you sure you want to delete this candidate?</p>
+            <div class="modal-warning-block">
+                <span class="modal-warning-icon">⚠️</span>
+                <strong>This action is PERMANENT.</strong>
             </div>
-            <div class="modal-body-comparison">
-                <div class="table-responsive">
-                    <table class="comparison-table">
-                        <thead id="comparison-thead">
-                            <!-- Headers dynamically rendered -->
-                        </thead>
-                        <tbody id="comparison-tbody">
-                            <!-- Rows dynamically rendered -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+            <p class="modal-detail-label" style="font-weight:600; margin-bottom:8px;">The following will be removed:</p>
+            <ul class="modal-detail-list" style="margin-left:20px; font-size:12.5px; color:var(--text-secondary); margin-bottom:12px;">
+                <li>Candidate database record</li>
+                <li>Original Resume file</li>
+                <li>Parsed JSON profile</li>
+                <li>Generated Client CV</li>
+                <li>Embedding cache &amp; FAISS index entry</li>
+            </ul>
+            <p class="modal-cannot-undo" style="color:var(--danger); font-weight:600; font-size:12.5px;">This action cannot be undone.</p>
+            <div id="deleteModalCandidateList" class="modal-candidate-names" style="margin-top:12px; max-height:100px; overflow-y:auto; border:1px solid var(--border); padding:8px; border-radius:4px;"></div>
+        </div>
+        <div class="modal-footer">
+            <button id="deleteModalCancelBtn" type="button" class="btn btn-ghost">Cancel</button>
+            <button id="deleteModalConfirmBtn" type="button" class="btn btn-danger">Delete Permanently</button>
         </div>
     </div>
+</div>
 
-    <!-- TOAST NOTIFICATION CONTAINER -->
-    <div class="toast-container" id="toast-container"></div>
-    <script src="app.js"></script>
+<!-- Candidate Comparison Overlay -->
+<div id="candidateComparisonOverlay" class="drawer-overlay" hidden>
+    <div class="drawer-content" style="max-width:90%; width:1000px;">
+        <div class="drawer-header">
+            <div>
+                <h2>Side-by-Side Comparison</h2>
+                <p class="drawer-meta" id="comparisonSubTitle">Comparing selected candidates</p>
+            </div>
+            <button type="button" class="drawer-close-btn" id="closeComparisonOverlayBtn" title="Close">×</button>
+        </div>
+        <div class="drawer-body" id="comparisonOverlayBody" style="overflow-y:auto; padding:0;"></div>
+    </div>
+</div>
+
+<!-- Success Toast Container -->
+<div id="toast-notification"></div>
+
+<script src="app.js?v=3"></script>
 </body>
 </html>

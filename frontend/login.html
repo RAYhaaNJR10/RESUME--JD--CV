@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Platform Login - AI Recruitment Platform</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --border: #e2e8f0;
+            --text: #0f172a;
+            --muted: #475569;
+            --primary: #4f46e5;
+            --primary-strong: #4338ca;
+            --primary-light: #e0e7ff;
+            --danger: #ef4444;
+            --success: #10b981;
+            --shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+            --radius: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+            background: radial-gradient(circle at 10% 20%, #f1f5f9 0%, #cbd5e1 90.1%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .auth-container {
+            width: 100%;
+            max-width: 440px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 40px 32px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        /* Top Accent Line */
+        .auth-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary) 0%, #3a9ebd 100%);
+        }
+
+        .brand {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .brand-icon {
+            font-size: 36px;
+            margin-bottom: 12px;
+            display: inline-block;
+            filter: drop-shadow(0 4px 6px rgba(23, 107, 135, 0.15));
+        }
+
+        .brand h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: -0.5px;
+        }
+
+        .brand p {
+            color: var(--muted);
+            font-size: 14px;
+            margin-top: 6px;
+        }
+
+        /* Tabs */
+        .auth-tabs {
+            display: flex;
+            background: var(--bg);
+            padding: 4px;
+            border-radius: 8px;
+            margin-bottom: 28px;
+            border: 1px solid var(--border);
+        }
+
+        .auth-tab {
+            flex: 1;
+            text-align: center;
+            padding: 10px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--muted);
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .auth-tab.active {
+            background: var(--surface);
+            color: var(--primary);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.04);
+        }
+
+        /* Forms */
+        .auth-form {
+            display: none;
+        }
+
+        .auth-form.active {
+            display: block;
+            animation: fadeIn 0.4s ease forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            height: 44px;
+            padding: 0 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            color: var(--text);
+            background: var(--surface);
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        .form-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+
+        .btn-submit {
+            width: 100%;
+            height: 44px;
+            background: var(--primary);
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-submit:hover {
+            background: var(--primary-strong);
+        }
+
+        .btn-submit:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        /* Message Box */
+        .alert {
+            display: none;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 1.4;
+            margin-bottom: 20px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .alert.error {
+            display: block;
+            background: #fff1f0;
+            border: 1px solid #ffc9c4;
+            color: var(--danger);
+        }
+
+        .alert.success {
+            display: block;
+            background: #eefbf3;
+            border: 1px solid #b8e4ca;
+            color: var(--success);
+        }
+
+        /* Spinner */
+        .spinner {
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border-left-color: white;
+            animation: spin 0.6s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="auth-container">
+        <div class="brand">
+            <span class="brand-icon">💼</span>
+            <h1>AI Recruitment Platform</h1>
+            <p>Sign in to manage candidates and generate CVs</p>
+        </div>
+
+        <div class="auth-tabs">
+            <div id="tabLogin" class="auth-tab active" onclick="switchTab('login')">Sign In</div>
+            <div id="tabRegister" class="auth-tab" onclick="switchTab('register')">Register</div>
+        </div>
+
+        <div id="alertBox" class="alert"></div>
+
+        <!-- Login Form -->
+        <form id="loginForm" class="auth-form active" onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label class="form-label" for="loginUsername">Username</label>
+                <input class="form-input" type="text" id="loginUsername" required autocomplete="username" placeholder="Enter username">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="loginPassword">Password</label>
+                <input class="form-input" type="password" id="loginPassword" required autocomplete="current-password" placeholder="Enter password">
+            </div>
+            <button class="btn-submit" type="submit" id="loginBtn">
+                <span>Sign In</span>
+            </button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="registerForm" class="auth-form" onsubmit="handleRegister(event)">
+            <div class="form-group">
+                <label class="form-label" for="regUsername">Username</label>
+                <input class="form-input" type="text" id="regUsername" required autocomplete="username" placeholder="Choose a username">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="regEmail">Email Address</label>
+                <input class="form-input" type="email" id="regEmail" required autocomplete="email" placeholder="you@example.com">
+                <div id="emailError" style="display: none; color: var(--danger); font-size: 13px; margin-top: 8px; line-height: 1.4; padding: 10px; background: #fff1f0; border: 1px solid #ffc9c4; border-radius: 6px;"></div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="regPassword">Password</label>
+                <input class="form-input" type="password" id="regPassword" required autocomplete="new-password" placeholder="Create a password">
+            </div>
+            <button class="btn-submit" type="submit" id="regBtn">
+                <span>Register Account</span>
+            </button>
+        </form>
+    </div>
+
+    <script>
+        const apiBase = ""; // relative paths target the active domain/port automatically!
+
+        function switchTab(tab) {
+            document.getElementById("alertBox").style.display = "none";
+            document.getElementById("emailError").style.display = "none";
+            
+            if (tab === 'login') {
+                document.getElementById("tabLogin").classList.add("active");
+                document.getElementById("tabRegister").classList.remove("active");
+                document.getElementById("loginForm").classList.add("active");
+                document.getElementById("registerForm").classList.remove("active");
+            } else {
+                document.getElementById("tabLogin").classList.remove("active");
+                document.getElementById("tabRegister").classList.add("active");
+                document.getElementById("loginForm").classList.remove("active");
+                document.getElementById("registerForm").classList.add("active");
+            }
+        }
+
+        function showAlert(msg, type = "error") {
+            const box = document.getElementById("alertBox");
+            box.textContent = msg;
+            box.className = `alert ${type}`;
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const usernameInput = document.getElementById("loginUsername");
+            const passwordInput = document.getElementById("loginPassword");
+            const btn = document.getElementById("loginBtn");
+
+            btn.disabled = true;
+            btn.innerHTML = `<div class="spinner"></div>`;
+
+            try {
+                const response = await fetch(`${apiBase}/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        username: usernameInput.value.trim(),
+                        password: passwordInput.value
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || "Authentication failed");
+                }
+
+                // Save token & username locally
+                localStorage.setItem("access_token", data.access_token);
+                localStorage.setItem("username", data.username);
+
+                // Redirect to dashboard
+                window.location.href = "/dashboard/";
+            } catch (err) {
+                showAlert(err.message, "error");
+                btn.disabled = false;
+                btn.innerHTML = "<span>Sign In</span>";
+            }
+        }
+
+        async function handleRegister(e) {
+            e.preventDefault();
+            const usernameInput = document.getElementById("regUsername");
+            const emailInput = document.getElementById("regEmail");
+            const passwordInput = document.getElementById("regPassword");
+            const btn = document.getElementById("regBtn");
+
+            const emailErrorDiv = document.getElementById("emailError");
+            emailErrorDiv.style.display = "none";
+
+            btn.disabled = true;
+            btn.innerHTML = `<div class="spinner"></div>`;
+
+            try {
+                const response = await fetch(`${apiBase}/register`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        username: usernameInput.value.trim(),
+                        email: emailInput.value.trim(),
+                        password: passwordInput.value
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    if (response.status === 409) {
+                        emailErrorDiv.innerHTML = "❌ This email is already registered.<br><br>Please use another email address or log in instead.";
+                        emailErrorDiv.style.display = "block";
+                        passwordInput.value = "";
+                        return;
+                    }
+                    throw new Error(data.detail || "Registration failed");
+                }
+
+                showAlert("Account registered successfully! You can now log in.", "success");
+                switchTab('login');
+                
+                // Clear registration fields
+                usernameInput.value = "";
+                emailInput.value = "";
+                passwordInput.value = "";
+            } catch (err) {
+                showAlert(err.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = "<span>Register Account</span>";
+            }
+        }
+    </script>
+</body>
+</html>
