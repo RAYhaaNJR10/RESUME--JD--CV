@@ -56,6 +56,30 @@ try:
     run_db_migration(engine)
     Base.metadata.create_all(bind=engine)
     print("Database tables initialized successfully.")
+    
+    # Automatically verify and rebuild FAISS indices if empty/missing
+    try:
+        from services.faiss_service import rebuild_index_from_json, load_index
+        db = SessionLocal()
+        try:
+            recruiters = db.query(RecruiterModel).all()
+            
+            # Check global index
+            global_index = load_index(None)
+            if global_index.ntotal == 0:
+                print("FAISS global index is empty on startup. Rebuilding from existing profiles...")
+                rebuild_index_from_json(recruiter_id=None)
+                
+            # Check each recruiter's index
+            for r in recruiters:
+                r_index = load_index(r.recruiter_id)
+                if r_index.ntotal == 0:
+                    print(f"FAISS index for recruiter {r.recruiter_id} ({r.username}) is empty. Rebuilding...")
+                    rebuild_index_from_json(recruiter_id=r.recruiter_id)
+        finally:
+            db.close()
+    except Exception as fe:
+        print(f"Failed to check/rebuild FAISS indices on startup: {fe}")
 except Exception as e:
     print(f"Database initialization failed: {e}")
 
@@ -226,6 +250,15 @@ def home():
         "message": "Resume JD CV Platform Running"
     }
 
+COMMON_SKILLS = {
+    "python", "sql", "aws", "docker", "kubernetes", "git", "ci/cd", "react", "node", "java", "c++",
+    "javascript", "typescript", "mysql", "postgresql", "oracle", "mongodb", "linux", "unix", "bash",
+    "pyspark", "spark", "hadoop", "etl", "jenkins", "terraform", "ansible", "azure", "gcp", "power bi",
+    "tableau", "excel", "html", "css", "django", "flask", "fastapi", "spring", "spring boot", "rest api",
+    "microservices", "jira", "scrum", "agile", "incident management", "problem management", "root cause analysis",
+    "monitoring", "alerting", "troubleshooting", "production support", "active directory"
+}
+
 def process_and_filter_matching_results(
     raw_matches: list,
     jd_text: str,
@@ -237,14 +270,7 @@ def process_and_filter_matching_results(
     jd_text_lower = jd_text.lower()
     
     # Common technologies list for detecting missing skills
-    common_skills = {
-        "python", "sql", "aws", "docker", "kubernetes", "git", "ci/cd", "react", "node", "java", "c++",
-        "javascript", "typescript", "mysql", "postgresql", "oracle", "mongodb", "linux", "unix", "bash",
-        "pyspark", "spark", "hadoop", "etl", "jenkins", "terraform", "ansible", "azure", "gcp", "power bi",
-        "tableau", "excel", "html", "css", "django", "flask", "fastapi", "spring", "spring boot", "rest api",
-        "microservices", "jira", "scrum", "agile", "incident management", "problem management", "root cause analysis",
-        "monitoring", "alerting", "troubleshooting", "production support", "active directory"
-    }
+    common_skills = COMMON_SKILLS
     
     recruiters = {r.recruiter_id: r.username for r in db.query(RecruiterModel).all()}
     db_candidates = db.query(CandidateModel).all()
@@ -723,34 +749,7 @@ def delete_candidates_bulk(
 
 
 
-@app.get("/candidate/{candidate_name}")
-def get_candidate_details(
-    candidate_name: str,
-    recruiter: RecruiterModel = Depends(get_current_recruiter)
-):
-
-    file_path = os.path.join(
-        PARSED_JSON_FOLDER,
-        str(recruiter.recruiter_id),
-        f"{candidate_name}.json"
-    )
-
-    if not os.path.exists(
-        file_path
-    ):
-
-        raise HTTPException(
-            status_code=404,
-            detail="Candidate not found"
-        )
-
-    with open(
-        file_path,
-        "r",
-        encoding="utf-8"
-    ) as f:
-        return json.load(f)
-
+# First definition of get_candidate_details removed to avoid duplication
 
 @app.post(
     "/upload-jd",
@@ -856,7 +855,7 @@ def compare_selected_candidates(
     comparison = compare_candidates(
         candidate_names,
         jd_text,
-        os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id))
+        PARSED_JSON_FOLDER
     )
 
     if not comparison["results"]:
@@ -908,12 +907,13 @@ def generate_selected_cvs(
     t_load_start = time.time()
     candidate_jsons = {}
     for candidate_name in candidate_names:
-        json_path = os.path.join(
-            PARSED_JSON_FOLDER,
-            str(recruiter.recruiter_id),
-            f"{candidate_name}.json"
-        )
-        if os.path.exists(json_path):
+        # Locate candidate's JSON profile recursively under PARSED_JSON_FOLDER
+        json_path = None
+        for root, dirs, files in os.walk(PARSED_JSON_FOLDER):
+            if f"{candidate_name}.json" in files:
+                json_path = os.path.join(root, f"{candidate_name}.json")
+                break
+        if json_path and os.path.exists(json_path):
             with open(json_path, "r", encoding="utf-8") as f:
                 candidate_jsons[candidate_name] = json.load(f)
     load_time = time.time() - t_load_start
@@ -1687,6 +1687,7 @@ def api_get_candidates(
                 "employee_id": cand.employee_id,
                 "email": cand.email or "",
                 "phone": cand.phone or "",
+                "location": "",
                 "current_role": "",
                 "years_of_experience": 0.0,
                 "skills": [],
@@ -1705,6 +1706,7 @@ def api_get_candidates(
                     cand_data["years_of_experience"] = float(js.get("years_of_experience", 0) or 0)
                     cand_data["skills"] = js.get("skills", [])
                     cand_data["filename"] = js.get("resume_filename", "")
+                    cand_data["location"] = js.get("location", "")
                     
                     techs = set()
                     for exp in js.get("experience", []):
@@ -1842,13 +1844,28 @@ def get_candidate_details(
         cand = db.query(CandidateModel).filter(CandidateModel.candidate_name == candidate_name).first()
         cand_recruiter_id = cand.recruiter_id if cand else recruiter.recruiter_id
         
+        # 1. Load parsed JSON (primary source)
+        safe_name = (
+            candidate_name
+            .replace("/", "_")
+            .replace("\\", "_")
+            .replace(":", "_")
+        )
         file_path = os.path.join(
             PARSED_JSON_FOLDER,
             str(cand_recruiter_id),
-            f"{candidate_name}.json"
+            f"{safe_name}.json"
         )
         
+        # Fallback recursive walk search if exact folder path is missing
         if not os.path.exists(file_path):
+            file_path = None
+            for root, dirs, files in os.walk(PARSED_JSON_FOLDER):
+                if f"{safe_name}.json" in files:
+                    file_path = os.path.join(root, f"{safe_name}.json")
+                    break
+        
+        if not file_path or not os.path.exists(file_path):
             raise HTTPException(
                 status_code=404,
                 detail="Candidate not found"
@@ -1857,14 +1874,86 @@ def get_candidate_details(
         with open(file_path, "r", encoding="utf-8") as f:
             candidate_data = json.load(f)
             
-        uploader = db.query(RecruiterModel).filter(RecruiterModel.recruiter_id == cand_recruiter_id).first()
-        candidate_data["uploaded_by"] = uploader.username if uploader else "unknown"
-        candidate_data["uploaded_date"] = cand.created_at.isoformat() if cand else ""
-        candidate_data["candidate_id"] = cand.candidate_id if cand else None
+        # Remove raw embedding vector — never needed by the frontend
+        candidate_data.pop("embedding", None)
+        
+        # 2. Promote search_profile → about_candidate / professional_summary if missing
+        if not candidate_data.get("about_candidate"):
+            candidate_data["about_candidate"] = candidate_data.get("search_profile", "")
+        if not candidate_data.get("professional_summary"):
+            candidate_data["professional_summary"] = candidate_data.get("about_candidate", "")
+            
+        # 3. Ensure experience entries have consistent field names
+        for exp in candidate_data.get("experience", []):
+            # Normalize role aliases
+            if not exp.get("role") and exp.get("title"):
+                exp["role"] = exp["title"]
+            # Normalize date aliases
+            if not exp.get("duration"):
+                start = exp.get("start_date", "") or exp.get("start_year", "")
+                end   = exp.get("end_date",   "") or exp.get("end_year",   "")
+                if start or end:
+                    exp["duration"] = f"{start} – {end}".strip(" –")
+
+        # 4. Merge DB fields
+        if cand:
+            # Email & Phone from DB (fallback if missing or empty in JSON)
+            if cand.email and not candidate_data.get("email"):
+                candidate_data["email"] = cand.email
+            if cand.phone and not candidate_data.get("phone"):
+                candidate_data["phone"] = cand.phone
+                
+            candidate_data["employee_id"] = cand.employee_id or ""
+            candidate_data["created_at"]  = str(cand.created_at) if cand.created_at else ""
+            candidate_data["uploaded_date"] = cand.created_at.isoformat() if cand.created_at else ""
+            candidate_data["candidate_id"] = cand.candidate_id
+            
+            # Uploader username
+            uploader = db.query(RecruiterModel).filter(
+                RecruiterModel.recruiter_id == cand.recruiter_id
+            ).first()
+            candidate_data["uploaded_by"] = uploader.username if uploader else ""
+            
+            # Resume filename from DocumentModel
+            doc = db.query(DocumentModel).filter(
+                DocumentModel.candidate_id == cand.candidate_id
+            ).first()
+            if doc and doc.original_resume_filename:
+                candidate_data["resume_filename"] = doc.original_resume_filename
+                
+            # Resume download URL
+            candidate_data["resume_url"] = (
+                f"/api/candidates/{cand.candidate_id}/download-resume"
+                if doc else ""
+            )
+        else:
+            candidate_data.setdefault("employee_id", "")
+            candidate_data.setdefault("uploaded_by", "")
+            candidate_data.setdefault("created_at",  "")
+            candidate_data.setdefault("uploaded_date", "")
+            candidate_data.setdefault("resume_url",  "")
+            
+        # 5. Ensure all expected fields exist with empty defaults
+        candidate_data.setdefault("candidate_name",      candidate_name)
+        candidate_data.setdefault("current_role",        "")
+        candidate_data.setdefault("years_of_experience", 0)
+        candidate_data.setdefault("email",               "")
+        candidate_data.setdefault("phone",               "")
+        candidate_data.setdefault("location",            "")
+        candidate_data.setdefault("linkedin",            "")
+        candidate_data.setdefault("github",              "")
+        candidate_data.setdefault("about_candidate",     "")
+        candidate_data.setdefault("skills",              [])
+        candidate_data.setdefault("domains",             [])
+        candidate_data.setdefault("experience",          [])
+        candidate_data.setdefault("education",           [])
+        candidate_data.setdefault("projects",            [])
+        candidate_data.setdefault("resume_filename",     "")
         
         return candidate_data
     finally:
         db.close()
+
 
 
 # Job Description CRUD APIs
@@ -2033,30 +2122,15 @@ def api_get_jd_matches(
         db.close()
 
 
-# ─────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────
 # AI SEMANTIC TALENT SEARCH
-# Reuses existing embedding_service + faiss_service — no duplication
-# ─────────────────────────────────────────────────────────────
+# Reuses existing embedding_service + faiss_service
+# ────────────────────────────────────────────────────────────
 @app.post("/api/candidates/semantic-search")
 def api_semantic_talent_search(
     payload: dict,
     current_recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
-    """
-    Natural-language semantic candidate search using FAISS + OpenAI embeddings.
-
-    Request body:
-      {
-        "query":      "Backend developer with FastAPI",   # required
-        "top_k":      20,                                  # optional, default 20
-        "min_score":  0.30,                                # optional, cosine sim threshold
-        "experience": "3-5",                               # optional filter
-        "role":       "",                                  # optional filter
-        "recruiter":  ""                                   # optional filter
-      }
-
-    Returns ranked candidates with semantic scores and AI-generated match explanations.
-    """
     from services.embedding_service import create_embedding
     from services.faiss_service import search_candidates
 
@@ -2064,56 +2138,56 @@ def api_semantic_talent_search(
     if not query:
         raise HTTPException(status_code=400, detail="Search query is required.")
 
-    top_k     = int(payload.get("top_k", 20))
-    min_score = float(payload.get("min_score", 0.30))
+    min_score        = float(payload.get("min_score", 0.10))
     exp_filter       = payload.get("experience", "")
     role_filter      = payload.get("role", "")
     recruiter_filter = payload.get("recruiter", "")
+    page             = max(1, int(payload.get("page", 1)))
+    limit            = max(1, int(payload.get("limit", 20)))
 
-    # 1. Embed the query using the existing embedding service
     try:
         query_embedding = create_embedding(query)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Embedding service error: {e}")
 
-    # 2. FAISS global search — reuse existing search_candidates function
-    raw_matches = search_candidates(query_embedding, top_k=max(top_k * 3, 60), recruiter_id=None)
+    raw_matches = search_candidates(query_embedding, top_k=200, recruiter_id=None)
 
-    # 3. Enrich with DB metadata and apply filters
     db = SessionLocal()
     try:
-        recruiters    = {r.recruiter_id: r.username for r in db.query(RecruiterModel).all()}
-        db_cand_map   = {c.candidate_name: c for c in db.query(CandidateModel).all()}
+        recruiters  = {r.recruiter_id: r.username for r in db.query(RecruiterModel).all()}
+        db_cand_map = {c.candidate_name: c for c in db.query(CandidateModel).all()}
+
+        TECH_INDICATORS = {
+            "docker","kubernetes","mysql","postgresql","mongodb","redis",
+            "elasticsearch","kafka","rabbitmq","react","vue","angular",
+            "jenkins","terraform","ansible","git","gitlab","github",
+            "autosys","splunk","dynatrace","appdynamics","prometheus","grafana",
+            "airflow","spark","hadoop","snowflake","databricks","dbt"
+        }
 
         enriched = []
         for match in raw_matches:
             score = float(match["score"])
             if score < min_score:
-                continue  # below similarity threshold
+                continue
 
-            name  = match["candidate_name"]
-            cand  = db_cand_map.get(name)
+            name = match["candidate_name"]
+            cand = db_cand_map.get(name)
             if not cand:
                 continue
 
             uploader = recruiters.get(cand.recruiter_id, "unknown")
-
-            # Apply optional filters
             if recruiter_filter and recruiter_filter.lower() != uploader.lower():
                 continue
 
-            # Load parsed JSON profile
             safe_name = name.replace("/", "_").replace("\\", "_").replace(":", "_")
-            file_path = os.path.join(
-                PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json"
-            )
+            file_path = os.path.join(PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json")
 
             profile_data = {}
-            skills        = []
-            current_role  = ""
-            years_of_exp  = 0.0
-            about         = ""
-            strengths_raw = []
+            skills = []
+            current_role = ""
+            years_of_exp = 0.0
+            about = ""
 
             if os.path.exists(file_path):
                 try:
@@ -2123,15 +2197,11 @@ def api_semantic_talent_search(
                     current_role = profile_data.get("current_role", "")
                     years_of_exp = float(profile_data.get("years_of_experience", 0) or 0)
                     about        = profile_data.get("about_candidate", "")
-                    strengths_raw = profile_data.get("strengths", [])
                 except Exception:
                     pass
 
-            # Apply role filter
             if role_filter and role_filter.lower() not in current_role.lower():
                 continue
-
-            # Apply experience filter
             if exp_filter:
                 try:
                     if "-" in exp_filter:
@@ -2139,77 +2209,115 @@ def api_semantic_talent_search(
                         if not (lo <= years_of_exp <= hi):
                             continue
                     else:
-                        lo = float(exp_filter)
-                        if years_of_exp < lo:
+                        if years_of_exp < float(exp_filter):
                             continue
                 except ValueError:
                     pass
 
-            # Build top technologies from experience + projects
             techs = set()
-            for exp in profile_data.get("experience", []):
-                techs.update(exp.get("technologies", []))
+            for exp_item in profile_data.get("experience", []):
+                techs.update(exp_item.get("technologies", []))
             for prj in profile_data.get("projects", []):
                 techs.update(prj.get("technologies", []))
 
             from services.comparison_service import infer_strengths
             strengths = infer_strengths(profile_data)
 
-            enriched.append({
-                "candidate_id":      cand.candidate_id,
-                "candidate_name":    name,
-                "current_role":      current_role,
-                "years_of_experience": years_of_exp,
-                "uploaded_by":       uploader,
-                "score":             score,
-                "skills":            skills[:10],
-                "technologies":      sorted(list(techs))[:8],
-                "about_candidate":   about,
-                "strengths":         strengths,
-                # store full profile fields for explanation generation
-                "_profile":          profile_data,
-            })
+            query_lower = query.lower()
+            cand_all_lower = {s.lower() for s in skills} | {t.lower() for t in techs}
 
-            if len(enriched) >= top_k:
-                break
+            matching_skills  = [sk for sk in skills if sk.lower() in query_lower]
+            matching_tech    = [t  for t  in sorted(techs) if t.lower() in query_lower]
+            matching_domains = [d  for d  in profile_data.get("domains", []) if d.lower() in query_lower]
+
+            matching_exp = ""
+            if current_role and any(tok in current_role.lower() for tok in query_lower.split() if len(tok) > 3):
+                matching_exp = f"{years_of_exp} years as {current_role}"
+            else:
+                for exp_item in profile_data.get("experience", []):
+                    r = exp_item.get("role", "") or exp_item.get("title", "")
+                    if r and any(tok in r.lower() for tok in query_lower.split() if len(tok) > 3):
+                        dur = exp_item.get("duration", "")
+                        matching_exp = f"Experience as {r}" + (f" ({dur})" if dur else "")
+                        break
+            if not matching_exp:
+                matching_exp = f"{years_of_exp} years of overall experience"
+
+            missing_skills = []
+            missing_tech   = []
+            for cs in COMMON_SKILLS:
+                if cs in query_lower and cs not in cand_all_lower:
+                    label = cs.title()
+                    if cs in TECH_INDICATORS:
+                        missing_tech.append(label)
+                    else:
+                        missing_skills.append(label)
+
+            import re as _re
+            missing_exp = ""
+            _m = _re.search(r"(\d+)\+?\s*years?", query_lower)
+            if _m:
+                req_yrs = float(_m.group(1))
+                if years_of_exp < req_yrs:
+                    missing_exp = f"Requires {req_yrs}+ years (candidate has {years_of_exp})"
+
+            enriched.append({
+                "candidate_id":        cand.candidate_id,
+                "candidate_name":      name,
+                "current_role":        current_role,
+                "years_of_experience": years_of_exp,
+                "uploaded_by":         uploader,
+                "score":               score,
+                "skills":              skills[:10],
+                "technologies":        sorted(list(techs))[:8],
+                "matching_skills":     matching_skills[:8],
+                "missing_skills":      missing_skills[:6],
+                "about_candidate":     about,
+                "strengths":           strengths,
+                "match_details": {
+                    "matching_skills":  matching_skills,
+                    "matching_tech":    matching_tech,
+                    "matching_domains": matching_domains,
+                    "matching_exp":     matching_exp,
+                    "missing_skills":   missing_skills,
+                    "missing_tech":     missing_tech,
+                    "missing_exp":      missing_exp,
+                },
+                "_profile": profile_data,
+            })
 
     finally:
         db.close()
 
-    if not enriched:
+    total = len(enriched)
+    if total == 0:
         return {
-            "count": 0,
-            "query": query,
+            "total": 0, "page": page, "limit": limit, "query": query,
             "results": [],
             "message": "No relevant candidates were found. Try broadening your search or upload additional resumes."
         }
 
-    # 4. Generate AI match explanations in parallel (ThreadPoolExecutor, max 5 workers)
+    page_slice = enriched[(page - 1) * limit: page * limit]
+
     from openai import OpenAI
     from dotenv import load_dotenv
     load_dotenv()
     _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _generate_explanation(item):
-        """Generate a one-sentence match explanation for a single candidate."""
         try:
-            name  = item["candidate_name"]
-            role  = item["current_role"]
-            exp   = item["years_of_experience"]
             sks   = ", ".join(item["skills"][:6]) if item["skills"] else "N/A"
             about = (item["about_candidate"] or "")[:300]
-
             prompt = (
                 f"You are a recruitment assistant. In ONE concise sentence (max 25 words), "
                 f"explain why this candidate matches the search query: \"{query}\".\n\n"
-                f"Candidate: {name}\n"
-                f"Role: {role}\n"
-                f"Experience: {exp} years\n"
+                f"Candidate: {item['candidate_name']}\n"
+                f"Role: {item['current_role']}\n"
+                f"Experience: {item['years_of_experience']} years\n"
                 f"Key skills: {sks}\n"
                 f"Profile: {about}\n\n"
                 f"Respond with only the single explanation sentence."
             )
-
             resp = _openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
@@ -2220,30 +2328,26 @@ def api_semantic_talent_search(
         except Exception:
             return ""
 
-    # Only generate explanations for the top 10 results to control cost
-    EXPLAIN_LIMIT = 10
     with ThreadPoolExecutor(max_workers=5) as executor:
-        explanation_futures = {
-            executor.submit(_generate_explanation, item): idx
-            for idx, item in enumerate(enriched[:EXPLAIN_LIMIT])
-        }
-        explanations = [""] * len(enriched)
-        for future, idx in explanation_futures.items():
+        futures = {executor.submit(_generate_explanation, item): i for i, item in enumerate(page_slice)}
+        explanations = [""] * len(page_slice)
+        for future, i in futures.items():
             try:
-                explanations[idx] = future.result(timeout=15)
+                explanations[i] = future.result(timeout=15)
             except Exception:
-                explanations[idx] = ""
+                pass
 
-    # 5. Build final response (strip internal _profile field)
     results_out = []
-    for idx, item in enumerate(enriched):
+    for i, item in enumerate(page_slice):
         item.pop("_profile", None)
-        item["explanation"] = explanations[idx] if idx < len(explanations) else ""
+        item["explanation"] = explanations[i]
         item["score_pct"]   = round(item["score"] * 100, 1)
         results_out.append(item)
 
     return {
-        "count":   len(results_out),
+        "total":   total,
+        "page":    page,
+        "limit":   limit,
         "query":   query,
         "results": results_out
     }
@@ -2314,6 +2418,40 @@ def api_download_generated_cv(
         )
     finally:
         db.close()
+
+
+@app.get("/api/candidates/{candidate_id}/download-resume")
+def api_download_original_resume(
+    candidate_id: int,
+    current_recruiter: RecruiterModel = Depends(get_current_recruiter)
+):
+    db = SessionLocal()
+    try:
+        doc = db.query(DocumentModel).filter(DocumentModel.candidate_id == candidate_id).first()
+        if not doc or not doc.original_resume_blob:
+            raise HTTPException(status_code=404, detail="Original resume not found")
+        
+        import io
+        from fastapi.responses import StreamingResponse
+        
+        filename = doc.original_resume_filename or "resume.pdf"
+        ext = os.path.splitext(filename)[1].lower()
+        if ext == ".docx":
+            media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        else:
+            media_type = "application/pdf"
+            
+        headers = {
+            "Content-Disposition": f"attachment; filename=\"{filename}\""
+        }
+        return StreamingResponse(
+            io.BytesIO(doc.original_resume_blob),
+            media_type=media_type,
+            headers=headers
+        )
+    finally:
+        db.close()
+
 
 
 @app.delete("/api/generated-cvs/{candidate_id}")

@@ -91,45 +91,43 @@ def load_candidate(
         candidate_name
     )
 
-    for filename in os.listdir(
-        parsed_json_folder
-    ):
+    for root, dirs, files in os.walk(parsed_json_folder):
+        for filename in files:
+            if not filename.endswith(".json"):
+                continue
 
-        if not filename.endswith(".json"):
-            continue
-
-        file_path = os.path.join(
-            parsed_json_folder,
-            filename
-        )
-
-        candidate = load_json(
-            file_path
-        )
-
-        if not candidate:
-            continue
-
-        candidate_profile_name = normalize_name(
-            candidate.get(
-                "candidate_name",
-                ""
-            )
-        )
-
-        filename_name = normalize_name(
-            os.path.splitext(
+            file_path = os.path.join(
+                root,
                 filename
-            )[0]
-        )
+            )
 
-        if (
-            requested_name == candidate_profile_name
-            or requested_name == filename_name
-            or requested_name in candidate_profile_name
-            or requested_name in filename_name
-        ):
-            return candidate
+            candidate = load_json(
+                file_path
+            )
+
+            if not candidate:
+                continue
+
+            candidate_profile_name = normalize_name(
+                candidate.get(
+                    "candidate_name",
+                    ""
+                )
+            )
+
+            filename_name = normalize_name(
+                os.path.splitext(
+                    filename
+                )[0]
+            )
+
+            if (
+                requested_name == candidate_profile_name
+                or requested_name == filename_name
+                or requested_name in candidate_profile_name
+                or requested_name in filename_name
+            ):
+                return candidate
 
     return None
 
