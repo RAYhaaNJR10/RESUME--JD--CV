@@ -1,78 +1,151 @@
-# Resume JD CV Platform
+# 📄 Resume-JD-CV Platform
 
-A comprehensive platform designed to streamline the recruitment process by parsing candidate resumes, analyzing job descriptions (JD), and generating tailored CVs. Built with a FastAPI backend and a clean, responsive HTML/CSS/JS frontend.
+**An AI-powered recruitment tool that parses resumes, analyzes job descriptions, ranks candidates, and generates tailored CVs — built with FastAPI, OpenAI, and FAISS.**
 
-## Key Features
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-412991)
+![FAISS](https://img.shields.io/badge/FAISS-Vector%20Search-yellow)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-- **Resume Upload & AI Parsing:** Upload resumes in PDF or DOCX formats. The system extracts text and uses AI (OpenAI) to intelligently parse and structure the candidate's profile.
-- **Job Description (JD) Analysis:** Upload or paste Job Descriptions to analyze core requirements.
-- **Candidate Ranking & Matching:** Employs advanced vector search (FAISS) and embeddings to rank candidates against a given Job Description, ensuring the best fit.
-- **Candidate Comparison:** Compare multiple candidates side-by-side to make informed decisions.
-- **Tailored CV Generation:** Automatically generate bespoke CVs in DOCX format tailored specifically to the requirements of the job description.
+---
 
-## Project Structure
+## 📌 Overview
 
-- `main.py`: The FastAPI application entry point containing routes and core API logic.
-- `frontend/`: Contains the static frontend files (`index.html`, `styles.css`, `app.js`).
-- `services/`: Encapsulates business logic, including AI integrations, document processing, and vector search.
-- `db.py`: Database configuration and SQLAlchemy models.
-- `requirements.txt`: Python package dependencies.
+Recruiters spend hours manually screening resumes against job descriptions. **Resume-JD-CV Platform** automates that pipeline end-to-end:
 
-## Prerequisites
+1. Upload a resume (PDF/DOCX) → AI extracts and structures the candidate's profile.
+2. Upload or paste a Job Description → the system analyzes core requirements.
+3. Candidates are embedded and ranked against the JD using **FAISS vector search**.
+4. Recruiters can compare candidates side-by-side and auto-generate a **tailored CV** in DOCX format matched to the job.
+
+---
+
+## ✨ Key Features
+
+| Feature | Description |
+|---|---|
+| 🧠 **AI Resume Parsing** | Extracts text from PDF/DOCX and uses OpenAI to structure candidate profiles (skills, experience, education). |
+| 📋 **JD Analysis** | Parses uploaded or pasted job descriptions to identify core requirements and keywords. |
+| 🔍 **Semantic Candidate Ranking** | Uses embeddings + FAISS to rank candidates by relevance to a given JD. |
+| ⚖️ **Candidate Comparison** | Side-by-side comparison view for shortlisting. |
+| 📝 **Tailored CV Generation** | Auto-generates a DOCX CV customized to match a specific job description. |
+| 🗄️ **Duplicate Detection** | Flags duplicate or near-duplicate resumes in the pipeline. |
+
+---
+
+## 🏗️ Architecture
+
+```
+┌──────────────┐      ┌──────────────┐      ┌───────────────────┐
+│   Frontend    │ ───▶ │   FastAPI    │ ───▶ │   OpenAI API       │
+│ (HTML/CSS/JS) │      │   (main.py)  │      │  (parsing, CV gen) │
+└──────────────┘      └──────┬───────┘      └───────────────────┘
+                              │
+                 ┌────────────┼─────────────┐
+                 ▼            ▼             ▼
+          ┌───────────┐ ┌───────────┐ ┌────────────┐
+          │ services/ │ │ embeddings/│ │   db.py    │
+          │ (business │ │ (FAISS +   │ │ (SQLAlchemy│
+          │  logic)   │ │  vectors)  │ │  models)   │
+          └───────────┘ └───────────┘ └────────────┘
+```
+
+---
+
+## 🛠️ Tech Stack
+
+- **Backend:** FastAPI, Python 3.8+
+- **AI/ML:** OpenAI API (GPT-4o), FAISS for vector similarity search
+- **Frontend:** HTML, CSS, JavaScript (vanilla)
+- **Database:** SQLAlchemy (SQLite by default, MySQL optional)
+- **Document Handling:** DOCX/PDF parsing and generation
+- **Deployment:** Docker-ready
+
+---
+
+## 📂 Project Structure
+
+```
+.
+├── main.py                  # FastAPI app entry point — routes & core API logic
+├── db.py                    # Database configuration and SQLAlchemy models
+├── build_index.py           # Builds the FAISS vector index from resume embeddings
+├── requirements.txt         # Python dependencies
+├── Dockerfile                # Container build configuration
+├── frontend/                 # Static frontend (index.html, styles.css, app.js)
+├── services/                  # Business logic: AI integration, doc processing, vector search
+├── embeddings/                 # Embedding generation & FAISS index storage
+├── test_cv_generation.py      # CV generation tests
+├── test_embedding.py          # Embedding pipeline tests
+├── test_matcher.py            # Candidate-JD matching tests
+├── test_parser.py             # Resume parsing tests
+├── test_search.py             # Vector search tests
+└── profiling_log.txt          # Performance profiling notes
+```
+
+---
+
+## ✅ Prerequisites
 
 - Python 3.8+
-- An OpenAI API Key for AI parsing and CV generation.
-- (Optional) MySQL or other relational database if configuring beyond the default SQLite fallback.
+- An **OpenAI API key** for AI parsing and CV generation
+- *(Optional)* MySQL or another relational database — falls back to SQLite by default
 
-## Setup Instructions
+---
 
-### 1. Clone the Repository
+## 🚀 Setup Instructions
 
+### 1. Clone the repository
 ```bash
-git clone <repository_url>
-cd <repository_directory>
+git clone https://github.com/RAYhaaNJR10/RESUME--JD--CV.git
+cd RESUME--JD--CV
 ```
 
-### 2. Set Up a Virtual Environment (Recommended)
-
+### 2. Set up a virtual environment
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+source venv/bin/activate   # On Windows: venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
-
+### 3. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
-
-Create a `.env` file in the root directory (or export the variables in your shell) and add the following:
-
+### 4. Configure environment variables
+Create a `.env` file in the root directory:
 ```env
 OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-4o  # or your preferred model
+OPENAI_MODEL=gpt-4o
 ```
 
-### 5. Start the Application
+### 5. Build the vector index (optional, if using pre-existing resume data)
+```bash
+python build_index.py
+```
 
-Run the FastAPI backend using `uvicorn`:
-
+### 6. Run the application
 ```bash
 uvicorn main:app --reload
 ```
 
-### 6. Access the Application
+### 7. Access the app
+- 🖥️ Frontend Dashboard: `http://127.0.0.1:8000/dashboard`
+- 📑 API Docs (Swagger UI): `http://127.0.0.1:8000/docs`
 
-Once the server is running, open your browser and navigate to:
+---
 
-- Frontend Dashboard: [http://127.0.0.1:8000/dashboard](http://127.0.0.1:8000/dashboard)
-- API Documentation (Swagger UI): [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+## 🐳 Run with Docker
 
-## Testing
+```bash
+docker build -t resume-jd-cv .
+docker run -p 8000:8000 --env-file .env resume-jd-cv
+```
 
-The project includes various test scripts at the root level. Ensure you have the proper environment variables set, then run the tests:
+---
+
+## 🧪 Testing
 
 ```bash
 python test_cv_generation.py
@@ -81,3 +154,30 @@ python test_matcher.py
 python test_parser.py
 python test_search.py
 ```
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Add authentication for multi-recruiter access
+- [ ] Support batch resume uploads
+- [ ] Export candidate rankings as CSV/PDF reports
+- [ ] Add support for additional file formats (RTF, plain text)
+
+---
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome. Feel free to open a PR or issue.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License.
+
+---
+
+## 👤 Author
+
+**Rayhaan** — AI/ML student & Data Science Intern, building tools at the intersection of AI and recruitment tech.
