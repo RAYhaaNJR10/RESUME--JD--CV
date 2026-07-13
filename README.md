@@ -22,7 +22,7 @@ A comprehensive platform designed to streamline the recruitment process by parsi
 
 - Python 3.8+
 - An OpenAI API Key for AI parsing and CV generation.
-- (Optional) MySQL or other relational database if configuring beyond the default SQLite fallback.
+- MySQL database (Required, as SQLite fallback has been removed).
 
 ## Setup Instructions
 
@@ -53,6 +53,16 @@ Create a `.env` file in the root directory (or export the variables in your shel
 ```env
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o  # or your preferred model
+
+# Database Configuration (MySQL)
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=resume_platform
+DB_USER=root
+DB_PASSWORD=root
+
+# Authentication
+JWT_SECRET_KEY=super-secret-key-change-me-123456
 ```
 
 ### 5. Start the Application
@@ -67,6 +77,7 @@ uvicorn main:app --reload
 
 Once the server is running, open your browser and navigate to:
 
+- Login Page: [http://127.0.0.1:8000/login](http://127.0.0.1:8000/login) (Default credentials: `admin` / `admin123`)
 - Frontend Dashboard: [http://127.0.0.1:8000/dashboard](http://127.0.0.1:8000/dashboard)
 - API Documentation (Swagger UI): [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
