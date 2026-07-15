@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from services.embedding_service import create_embedding
 
 
 STOP_WORDS = {
@@ -23,34 +24,54 @@ STOP_WORDS = {
     "with",
     "we",
     "you",
+    "who",
 }
 
 
 def compare_candidates(
-    candidate_names,
+    db_candidates,
     jd_text,
-    parsed_json_folder="parsed_json"
+    parsed_json_folder="parsed_json",
+    recruiter_id=None
 ):
+    from services.matcher import match_candidates
+    from services.embedding_service import create_embedding
+
     comparisons = []
     missing_candidates = []
 
-    for candidate_name in candidate_names:
+    name_to_score = {}
+    jd_embedding = None
+    if jd_text and jd_text != "General Profile Comparison":
+        try:
+            # Query match_candidates to obtain the exact FAISS scores used during ranking
+            matches = match_candidates(jd_text, top_k=1000, recruiter_id=recruiter_id)
+            name_to_score = {m["candidate_name"]: m["score"] for m in matches}
+            
+            # Create JD embedding for fallback calculations
+            jd_embedding = create_embedding(jd_text)
+        except Exception as e:
+            print(f"Error fetching semantic scores for comparison: {e}")
 
-        candidate = load_candidate(
-            candidate_name,
-            parsed_json_folder
-        )
+    for cand in db_candidates:
+        safe_name = cand.candidate_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+        file_path = os.path.join(parsed_json_folder, str(cand.recruiter_id), f"{safe_name}.json")
+        candidate_data = load_json(file_path)
 
-        if not candidate:
+        if not candidate_data:
             missing_candidates.append(
-                candidate_name
+                cand.candidate_name
             )
             continue
 
+        candidate_data["candidate_id"] = cand.candidate_id
+
         comparisons.append(
             build_candidate_comparison(
-                candidate,
-                jd_text
+                candidate_data,
+                jd_text,
+                jd_embedding,
+                name_to_score
             )
         )
 
@@ -149,7 +170,9 @@ def load_json(
 
 def build_candidate_comparison(
     candidate,
-    jd_text
+    jd_text,
+    jd_embedding=None,
+    name_to_score=None
 ):
     key_skills = candidate.get(
         "skills",
@@ -167,6 +190,7 @@ def build_candidate_comparison(
     )
 
     return {
+        "candidate_id": candidate.get("candidate_id"),
         "candidate_name": candidate.get(
             "candidate_name",
             ""
@@ -181,7 +205,9 @@ def build_candidate_comparison(
         ),
         "match_score": calculate_match_score(
             candidate,
-            jd_text
+            jd_text,
+            jd_embedding,
+            name_to_score
         ),
         "key_skills": prioritize_skills(
             key_skills,
@@ -199,8 +225,30 @@ def build_candidate_comparison(
 
 def calculate_match_score(
     candidate,
-    jd_text
+    jd_text,
+    jd_embedding=None,
+    name_to_score=None
 ):
+    candidate_name = candidate.get("candidate_name", "").strip()
+    
+    # 1. First priority: Reuse the exact score from match_candidates (FAISS) if available
+    if name_to_score and candidate_name in name_to_score:
+        raw_score = name_to_score[candidate_name]
+        return round(raw_score * 100, 1)
+
+    # 2. Second priority: Fallback to direct embedding dot product if candidate is not in the list
+    candidate_embedding = candidate.get("embedding")
+    if candidate_embedding and jd_embedding:
+        import numpy as np
+        import faiss
+        vec1 = np.array(jd_embedding, dtype=np.float32).reshape(1, -1)
+        vec2 = np.array(candidate_embedding, dtype=np.float32).reshape(1, -1)
+        faiss.normalize_L2(vec1)
+        faiss.normalize_L2(vec2)
+        dot_prod = float(np.dot(vec1, vec2.T)[0][0])
+        return round(dot_prod * 100, 1)
+
+    # 3. Third priority: Fallback to keyword-based Jaccard similarity if no embedding is available
     jd_terms = tokenize(
         jd_text
     )

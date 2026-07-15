@@ -3,6 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from typing import List
+from pydantic import BaseModel
+
+class ComparePayload(BaseModel):
+    candidate_ids: List[int]
+    jd: str
+
+class GenerateCVsPayload(BaseModel):
+    candidate_ids: List[int]
+    jd: str
+
 from concurrent.futures import ThreadPoolExecutor
 
 import json
@@ -377,13 +387,56 @@ def process_and_filter_matching_results(
             "current_role": current_role,
             "years_of_experience": years_of_exp,
             "uploaded_by": uploader_username,
-            "score": score,
+            "score": round(score * 100, 1),
             "matching_skills": matching_skills[:8],
             "missing_skills": missing_skills[:8],
             "search_profile": search_profile
         })
         
     return processed_results
+
+
+def sync_jd_matches(jd_id: int, processed_results: list, db):
+    try:
+        # Retrieve or create applications
+        existing_apps = db.query(ApplicationModel).filter(ApplicationModel.jd_id == jd_id).all()
+        existing_map = {app.candidate_id: app for app in existing_apps}
+        
+        new_candidate_ids = set()
+        for item in processed_results:
+            cand_id = item["candidate_id"]
+            score_pct = item["score"]
+            # Convert back to float between 0 and 1 for DB storage if it was scaled to 100
+            score_float = score_pct / 100.0 if score_pct > 1.0 else score_pct
+            new_candidate_ids.add(cand_id)
+            
+            if cand_id in existing_map:
+                app = existing_map[cand_id]
+                app.similarity_score = score_float
+                if app.status != "CV_GENERATED":
+                    app.status = "MATCHED"
+                app.updated_at = datetime.utcnow()
+            else:
+                app = ApplicationModel(
+                    candidate_id=cand_id,
+                    jd_id=jd_id,
+                    similarity_score=score_float,
+                    status="MATCHED",
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(app)
+                
+        # Remove old MATCHED applications that are no longer matching
+        for cand_id, app in existing_map.items():
+            if cand_id not in new_candidate_ids and app.status != "CV_GENERATED":
+                db.delete(app)
+                
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Error syncing JD matches: {e}")
+
 
 
 @app.post("/rank-candidates")
@@ -416,6 +469,14 @@ def rank_candidates(
             "candidate_names": payload.get("candidate_names", [])
         }
         processed = process_and_filter_matching_results(results, jd_text, db, filters)
+        
+        jd_id = payload.get("jd_id")
+        if jd_id:
+            try:
+                sync_jd_matches(int(jd_id), processed, db)
+            except Exception as ex:
+                print(f"Error syncing JD matches during ranking: {ex}")
+                
         return {
             "count": len(processed),
             "results": processed
@@ -427,66 +488,40 @@ def rank_candidates(
 def get_all_candidates(
     recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
-
-    candidates = []
-    rec_parsed_dir = os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id))
-
-    if not os.path.exists(
-        rec_parsed_dir
-    ):
-        return []
-
-    for filename in os.listdir(
-        rec_parsed_dir
-    ):
-
-        if not filename.endswith(".json") or filename == "upload_stats.json":
-            continue
-
-        file_path = os.path.join(
-            rec_parsed_dir,
-            filename
-        )
-
-        try:
-
-            with open(
-                file_path,
-                "r",
-                encoding="utf-8"
-            ) as f:
-
-                candidate = json.load(f)
-
-            candidates.append(
-                {
-                    "candidate_name":
-                        candidate.get(
-                            "candidate_name",
-                            ""
-                        ),
-
-                    "current_role":
-                        candidate.get(
-                            "current_role",
-                            ""
-                        ),
-
-                    "years_of_experience":
-                        candidate.get(
-                            "years_of_experience",
-                            0
-                        ),
-
-                    "filename":
-                        candidate.get("resume_filename", filename)
-                }
-            )
-
-        except Exception:
-            pass
-
-    return candidates
+    db = SessionLocal()
+    try:
+        db_candidates = db.query(CandidateModel).filter(
+            CandidateModel.recruiter_id == recruiter.recruiter_id
+        ).all()
+        
+        candidates = []
+        for cand in db_candidates:
+            safe_name = cand.candidate_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            file_path = os.path.join(PARSED_JSON_FOLDER, str(recruiter.recruiter_id), f"{safe_name}.json")
+            
+            current_role = cand.current_role or ""
+            years_of_exp = cand.years_of_experience or 0.0
+            
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        js = json.load(f)
+                    current_role = js.get("current_role", current_role)
+                    years_of_exp = float(js.get("years_of_experience", years_of_exp) or 0)
+                except Exception:
+                    pass
+                    
+            candidates.append({
+                "candidate_id": cand.candidate_id,
+                "candidate_name": cand.candidate_name,
+                "current_role": current_role,
+                "years_of_experience": years_of_exp,
+                "filename": cand.resume_filename or "",
+                "uploaded_by": recruiter.username
+            })
+        return candidates
+    finally:
+        db.close()
 
 
 @app.delete("/candidates")
@@ -824,45 +859,56 @@ async def upload_jd(
 
 @app.post("/compare-candidates")
 def compare_selected_candidates(
-    payload: dict,
+    payload: ComparePayload,
     recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
+    candidate_ids = payload.candidate_ids
+    jd_text = payload.jd
 
-    candidate_names = payload.get(
-        "candidate_names",
-        []
-    )
-
-    jd_text = payload.get(
-        "jd",
-        ""
-    )
-
-    if not candidate_names:
-
+    if not candidate_ids:
         raise HTTPException(
             status_code=400,
             detail="No candidates selected"
         )
 
     if not jd_text:
-
         raise HTTPException(
             status_code=400,
             detail="JD text is required"
         )
 
+    # Load candidates from database in the exact requested order
+    db = SessionLocal()
+    try:
+        candidates_map = {c.candidate_id: c for c in db.query(CandidateModel).filter(
+            CandidateModel.candidate_id.in_(candidate_ids),
+            CandidateModel.recruiter_id == recruiter.recruiter_id
+        ).all()}
+        
+        ordered_candidates = []
+        for cid in candidate_ids:
+            if cid in candidates_map:
+                ordered_candidates.append(candidates_map[cid])
+    finally:
+        db.close()
+
     comparison = compare_candidates(
-        candidate_names,
+        ordered_candidates,
         jd_text,
-        PARSED_JSON_FOLDER
+        PARSED_JSON_FOLDER,
+        recruiter.recruiter_id
     )
 
     if not comparison["results"]:
-
+        missing = comparison.get("missing_candidates", [])
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Parsed JSON not found for: {', '.join(missing)}. The candidate profile may be missing or corrupt."
+            )
         raise HTTPException(
             status_code=404,
-            detail="No matching candidates found"
+            detail="No candidates matched your recruiter account. Ensure the selected candidates belong to your account."
         )
 
     return comparison
@@ -870,23 +916,16 @@ def compare_selected_candidates(
 
 @app.post("/generate-selected-cvs")
 def generate_selected_cvs(
-    payload: dict,
+    payload: GenerateCVsPayload,
     recruiter: RecruiterModel = Depends(get_current_recruiter)
 ):
     import time
     t_start = time.time()
 
-    candidate_names = payload.get(
-        "candidate_names",
-        []
-    )
+    candidate_ids = payload.candidate_ids
+    jd_text = payload.jd
 
-    jd_text = payload.get(
-        "jd",
-        ""
-    )
-
-    if not candidate_names:
+    if not candidate_ids:
         raise HTTPException(
             status_code=400,
             detail="No candidates selected"
@@ -906,16 +945,21 @@ def generate_selected_cvs(
     # 1. Load Candidate JSON
     t_load_start = time.time()
     candidate_jsons = {}
-    for candidate_name in candidate_names:
-        # Locate candidate's JSON profile recursively under PARSED_JSON_FOLDER
-        json_path = None
-        for root, dirs, files in os.walk(PARSED_JSON_FOLDER):
-            if f"{candidate_name}.json" in files:
-                json_path = os.path.join(root, f"{candidate_name}.json")
-                break
-        if json_path and os.path.exists(json_path):
-            with open(json_path, "r", encoding="utf-8") as f:
-                candidate_jsons[candidate_name] = json.load(f)
+    db = SessionLocal()
+    try:
+        db_candidates = db.query(CandidateModel).filter(
+            CandidateModel.candidate_id.in_(candidate_ids),
+            CandidateModel.recruiter_id == recruiter.recruiter_id
+        ).all()
+        
+        for cand in db_candidates:
+            safe_name = cand.candidate_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            json_path = os.path.join(PARSED_JSON_FOLDER, str(cand.recruiter_id), f"{safe_name}.json")
+            if os.path.exists(json_path):
+                with open(json_path, "r", encoding="utf-8") as f:
+                    candidate_jsons[cand.candidate_name] = json.load(f)
+    finally:
+        db.close()
     load_time = time.time() - t_load_start
 
     # Resolve model name and setup cache
@@ -1059,20 +1103,84 @@ def generate_selected_cvs(
     return response
 
 
-def process_single_resume_worker(filename: str, temp_path: str, content: bytes, model_name: str):
+def process_single_resume_worker(filename: str, temp_path: str, content: bytes, model_name: str, recruiter_id: int):
     import time
     import hashlib
     import json
     import os
     from services.extractor import extract_text
     from services.openai_service import parse_resume_with_ai
+    from db import SessionLocal, CandidateModel, DocumentModel, normalize_candidate_name, extract_email, extract_phone
 
     try:
+        print("Checking duplicate...")
+        # Priority 1: SHA-256 file hash
+        file_hash = hashlib.sha256(content).hexdigest()
+        db = SessionLocal()
+        try:
+            db_doc = db.query(DocumentModel).join(CandidateModel).filter(
+                DocumentModel.original_resume_blob == content,
+                CandidateModel.recruiter_id == recruiter_id
+            ).first()
+            if db_doc:
+                print("Duplicate found by hash.")
+                print("Skipping upload.")
+                return {
+                    "success": True,
+                    "duplicate": True,
+                    "reason": "hash",
+                    "filename": filename
+                }
+        except Exception as e:
+            print(f"Error in hash duplicate check: {e}")
+        finally:
+            db.close()
+
         t_extract_start = time.time()
         raw_text = extract_text(temp_path)
         extract_time = time.time() - t_extract_start
 
-        file_hash = hashlib.sha256(content).hexdigest()
+        # Priority 2: Candidate email
+        email = extract_email(raw_text)
+        # Priority 3: Candidate phone number
+        phone = extract_phone(raw_text)
+
+        db = SessionLocal()
+        try:
+            if email:
+                db_candidate = db.query(CandidateModel).filter(
+                    CandidateModel.email == email,
+                    CandidateModel.recruiter_id == recruiter_id
+                ).first()
+                if db_candidate:
+                    print("Duplicate found by email.")
+                    print("Skipping upload.")
+                    return {
+                        "success": True,
+                        "duplicate": True,
+                        "reason": "email",
+                        "filename": filename
+                    }
+
+            if phone:
+                db_candidate = db.query(CandidateModel).filter(
+                    CandidateModel.phone == phone,
+                    CandidateModel.recruiter_id == recruiter_id
+                ).first()
+                if db_candidate:
+                    print("Duplicate found by phone.")
+                    print("Skipping upload.")
+                    return {
+                        "success": True,
+                        "duplicate": True,
+                        "reason": "phone",
+                        "filename": filename
+                    }
+        except Exception as e:
+            print(f"Error in email/phone duplicate check: {e}")
+        finally:
+            db.close()
+
         cache_key = hashlib.md5(f"{file_hash}:{model_name}:1.0".encode("utf-8")).hexdigest()
         
         cache_dir = "uploads/resumes/cache"
@@ -1110,9 +1218,39 @@ def process_single_resume_worker(filename: str, temp_path: str, content: bytes, 
 
         openai_time = time.time() - t_openai_start
         candidate["resume_filename"] = filename
+
+        candidate_name = candidate.get("candidate_name", "").strip()
+        if not candidate_name:
+            candidate_name = candidate.get("name", "").strip()
+        if not candidate_name:
+            candidate_name = candidate.get("full_name", "").strip()
+
+        # Priority 4: Normalized candidate name
+        if candidate_name:
+            db = SessionLocal()
+            try:
+                target_norm = normalize_candidate_name(candidate_name)
+                all_candidates = db.query(CandidateModel).filter(
+                    CandidateModel.recruiter_id == recruiter_id
+                ).all()
+                for cand in all_candidates:
+                    if normalize_candidate_name(cand.candidate_name) == target_norm:
+                        print("Duplicate found by candidate name.")
+                        print("Skipping upload.")
+                        return {
+                            "success": True,
+                            "duplicate": True,
+                            "reason": "name",
+                            "filename": filename
+                        }
+            except Exception as e:
+                print(f"Error in name duplicate check: {e}")
+            finally:
+                db.close()
         
         return {
             "success": True,
+            "duplicate": False,
             "candidate": candidate,
             "raw_text": raw_text,
             "extract_time": extract_time,
@@ -1156,7 +1294,7 @@ async def upload_resumes(
     # Load statistics configuration per recruiter
     stats_path = f"embeddings/{rec_id_str}/upload_stats.json"
     os.makedirs(os.path.dirname(stats_path), exist_ok=True)
-    stats = {"new_candidates": 0, "updated_candidates": 0}
+    stats = {"new_candidates": 0, "updated_candidates": 0, "duplicates_skipped": 0}
     if os.path.exists(stats_path):
         try:
             with open(stats_path, "r") as f:
@@ -1211,7 +1349,8 @@ async def upload_resumes(
                     info["filename"],
                     info["temp_path"],
                     info["content"],
-                    model_name
+                    model_name,
+                    recruiter.recruiter_id
                 ): info
                 for info in valid_files_info
             }
@@ -1242,6 +1381,12 @@ async def upload_resumes(
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             failed_files.append({"filename": filename, "error": res.get("error", "Parsing failed")})
+            continue
+
+        if res.get("duplicate"):
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            stats["duplicates_skipped"] = stats.get("duplicates_skipped", 0) + 1
             continue
             
         candidate = res["candidate"]
@@ -1978,6 +2123,23 @@ def create_job_description(
         db.add(jd)
         db.commit()
         db.refresh(jd)
+        
+        # Run matches sync immediately so it has a non-zero count
+        try:
+            results = match_candidates(
+                jd.full_description,
+                top_k=100,
+                recruiter_id=None
+            )
+            filters = {
+                "global_pool": True,
+                "current_recruiter_id": recruiter.recruiter_id
+            }
+            processed = process_and_filter_matching_results(results, jd.full_description, db, filters)
+            sync_jd_matches(jd.jd_id, processed, db)
+        except Exception as ex:
+            print(f"Error syncing matches on creation: {ex}")
+            
         return {"success": True, "jd_id": jd.jd_id}
     except Exception as e:
         db.rollback()
@@ -2051,6 +2213,23 @@ def update_job_description(
         jd.full_description = description
         jd.updated_at = datetime.utcnow()
         db.commit()
+        
+        # Run matches sync immediately so it has a non-zero count
+        try:
+            results = match_candidates(
+                jd.full_description,
+                top_k=100,
+                recruiter_id=None
+            )
+            filters = {
+                "global_pool": True,
+                "current_recruiter_id": recruiter.recruiter_id
+            }
+            processed = process_and_filter_matching_results(results, jd.full_description, db, filters)
+            sync_jd_matches(jd.jd_id, processed, db)
+        except Exception as ex:
+            print(f"Error syncing matches on update: {ex}")
+            
         return {"success": True}
     except Exception as e:
         db.rollback()
@@ -2117,6 +2296,12 @@ def api_get_jd_matches(
         }
         
         processed = process_and_filter_matching_results(results, jd.full_description, db, filters)
+        
+        try:
+            sync_jd_matches(jd_id, processed, db)
+        except Exception as ex:
+            print(f"Error syncing JD matches: {ex}")
+            
         return processed
     finally:
         db.close()

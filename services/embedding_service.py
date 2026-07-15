@@ -16,6 +16,5 @@ def create_embedding(text):
         model="text-embedding-3-small",
         input=text
     )
-    print(os.getenv("OPENAI_API_KEY"))
 
     return response.data[0].embedding

@@ -483,9 +483,9 @@ function setupNewRecruitment() {
     if (checkAll) checkAll.addEventListener("change", (e) => {
         document.querySelectorAll(".nr-rank-check").forEach(cb => {
             cb.checked = e.target.checked;
-            const name = cb.dataset.name;
-            if (e.target.checked) nrSelectedCandidates.add(name);
-            else nrSelectedCandidates.delete(name);
+            const cid = Number(cb.dataset.id);
+            if (e.target.checked) nrSelectedCandidates.add(cid);
+            else nrSelectedCandidates.delete(cid);
         });
         updateNrSelectionActions();
     });
@@ -744,7 +744,12 @@ async function nrRunRanking() {
     const onlyNew     = document.getElementById("nrOnlyNew")?.checked;
     const scopeAll    = document.getElementById("nrScopeAll")?.checked;
 
+    const jdSelect = document.getElementById("nrJdSelect");
+    const jdId = jdSelect ? parseInt(jdSelect.value) : null;
     let payload = { jd: jdText, global_pool: true };
+    if (jdId && !isNaN(jdId)) {
+        payload.jd_id = jdId;
+    }
 
     if (onlyNew) {
         // Only score newly uploaded
@@ -826,7 +831,7 @@ function nrRenderRankedResults(results) {
         const tr = document.createElement("tr");
         tr.innerHTML = `
             <td class="checkbox-col">
-                <input type="checkbox" class="nr-rank-check" data-name="${escapeHtml(r.candidate_name)}">
+                <input type="checkbox" class="nr-rank-check" data-id="${r.candidate_id}" data-name="${escapeHtml(r.candidate_name)}">
             </td>
             <td class="candidate-name-cell" onclick="viewCandidateProfile('${escapeHtml(r.candidate_name)}')">${escapeHtml(r.candidate_name)}</td>
             <td class="role-text">${escapeHtml(r.current_role || "Unknown")}</td>
@@ -844,15 +849,15 @@ function nrRenderRankedResults(results) {
             <td>
                 <div class="actions-cell-wrap" style="display:flex; gap:6px;">
                     <button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(r.candidate_name)}')">Profile</button>
-                    <button type="button" class="btn btn-secondary compact-btn" onclick="triggerSingleCandidateComparison('${escapeHtml(r.candidate_name)}')">Compare</button>
-                    <button type="button" class="btn btn-primary compact-btn" onclick="triggerSingleCandidateCv('${escapeHtml(r.candidate_name)}')">Generate CV</button>
+                    <button type="button" class="btn btn-primary compact-btn" onclick="triggerSingleCandidateCv(${r.candidate_id}, '${escapeHtml(r.candidate_name)}')">Generate CV</button>
                 </div>
             </td>`;
         body.appendChild(tr);
 
         tr.querySelector(".nr-rank-check").addEventListener("change", (e) => {
-            if (e.target.checked) nrSelectedCandidates.add(r.candidate_name);
-            else nrSelectedCandidates.delete(r.candidate_name);
+            const cid = Number(r.candidate_id);
+            if (e.target.checked) nrSelectedCandidates.add(cid);
+            else nrSelectedCandidates.delete(cid);
             updateNrSelectionActions();
         });
     });
@@ -869,10 +874,10 @@ function updateNrSelectionActions() {
 // ─── CV Generation ────────────────────────────────────
 
 async function nrDoGenerateCVs() {
-    const names  = Array.from(nrSelectedCandidates);
+    const ids  = Array.from(nrSelectedCandidates).map(Number);
     const jdText = (document.getElementById("nrJdText")?.value || "").trim();
 
-    if (names.length === 0) { showMessage("Select at least one candidate.", "error"); return; }
+    if (ids.length === 0) { showMessage("Select at least one candidate.", "error"); return; }
 
     // Show step 5
     nrShowStep(5);
@@ -885,7 +890,7 @@ async function nrDoGenerateCVs() {
     const progress = document.getElementById("nrGenerateProgress");
     const result   = document.getElementById("nrGenerateResult");
 
-    if (countEl)  countEl.textContent = names.length;
+    if (countEl)  countEl.textContent = ids.length;
     if (progress) progress.style.display = "flex";
     if (result)   result.style.display = "none";
 
@@ -893,10 +898,15 @@ async function nrDoGenerateCVs() {
         const res = await authedFetch(`${getApiBase()}/generate-selected-cvs`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ candidate_names: names, jd: jdText || "General Professional Profile" })
+            body: JSON.stringify({ candidate_ids: ids, jd: jdText || "General Professional Profile" })
         });
 
         if (!res.ok) throw new Error(await res.text() || "Generation failed");
+
+        const contentType = res.headers.get("Content-Type") || "";
+        if (!contentType.includes("zip") && !contentType.includes("octet-stream")) {
+            throw new Error(await res.text() || "Server returned an unexpected response instead of a ZIP file.");
+        }
 
         const blob = await res.blob();
         const url  = URL.createObjectURL(blob);
@@ -907,11 +917,11 @@ async function nrDoGenerateCVs() {
         const link = document.getElementById("nrDownloadLink");
         if (link) {
             link.href = url;
-            link.download = `CVs_${names.join("_").substring(0, 40)}_${new Date().toISOString().slice(0,10)}.zip`;
+            link.download = `CVs_${ids.length}_candidates_${new Date().toISOString().slice(0,10)}.zip`;
         }
 
         const descEl = document.getElementById("nrGenerateResultDesc");
-        if (descEl) descEl.textContent = `${names.length} CV(s) generated. Your download should begin automatically.`;
+        if (descEl) descEl.textContent = `${ids.length} CV(s) generated. Your download should begin automatically.`;
 
         link?.click();
         await fetchGeneratedCvs();
@@ -1159,19 +1169,21 @@ function renderPoolBrowseResults(results) {
             <td><span style="color:var(--text-muted); font-size:12px;">—</span></td>
             <td>${skillTags || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
             <td><span style="color:var(--text-muted); font-size:12px;">—</span></td>
-            <td style="text-align:center;"><input type="checkbox" class="pool-compare-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-compare-check-b-${idx}"></td>
-            <td style="text-align:center;"><input type="checkbox" class="pool-generate-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-generate-check-b-${idx}"></td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-compare-check" data-id="${c.candidate_id}" data-name="${escapeHtml(c.candidate_name)}" id="pool-compare-check-b-${idx}"></td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-generate-check" data-id="${c.candidate_id}" data-name="${escapeHtml(c.candidate_name)}" id="pool-generate-check-b-${idx}"></td>
             <td style="text-align:center;"><button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">Preview</button></td>`;
         body.appendChild(tr);
 
         tr.querySelector(".pool-compare-check").addEventListener("change", e => {
-            if (e.target.checked) poolSelectedCompareCandidates.add(c.candidate_name);
-            else poolSelectedCompareCandidates.delete(c.candidate_name);
+            const cid = Number(c.candidate_id);
+            if (e.target.checked) poolSelectedCompareCandidates.add(cid);
+            else poolSelectedCompareCandidates.delete(cid);
             updatePoolSelectionActions();
         });
         tr.querySelector(".pool-generate-check").addEventListener("change", e => {
-            if (e.target.checked) poolSelectedGenerateCandidates.add(c.candidate_name);
-            else poolSelectedGenerateCandidates.delete(c.candidate_name);
+            const cid = Number(c.candidate_id);
+            if (e.target.checked) poolSelectedGenerateCandidates.add(cid);
+            else poolSelectedGenerateCandidates.delete(cid);
             updatePoolSelectionActions();
         });
     });
@@ -1279,8 +1291,8 @@ function renderPoolSemanticSearchResults(results) {
             </td>
             <td>${matchingSkillsTags || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
             <td>${missingSkillsTags  || '<span style="color:var(--text-muted); font-size:12px;">—</span>'}</td>
-            <td style="text-align:center;"><input type="checkbox" class="pool-compare-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-compare-check-s-${globalIdx}"></td>
-            <td style="text-align:center;"><input type="checkbox" class="pool-generate-check" data-name="${escapeHtml(c.candidate_name)}" id="pool-generate-check-s-${globalIdx}"></td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-compare-check" data-id="${c.candidate_id}" data-name="${escapeHtml(c.candidate_name)}" id="pool-compare-check-s-${globalIdx}"></td>
+            <td style="text-align:center;"><input type="checkbox" class="pool-generate-check" data-id="${c.candidate_id}" data-name="${escapeHtml(c.candidate_name)}" id="pool-generate-check-s-${globalIdx}"></td>
             <td style="text-align:center;"><button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">Preview</button></td>`;
         body.appendChild(tr);
 
@@ -1296,13 +1308,15 @@ function renderPoolSemanticSearchResults(results) {
         body.appendChild(whyRow);
 
         tr.querySelector(".pool-compare-check").addEventListener("change", e => {
-            if (e.target.checked) poolSelectedCompareCandidates.add(c.candidate_name);
-            else poolSelectedCompareCandidates.delete(c.candidate_name);
+            const cid = Number(c.candidate_id);
+            if (e.target.checked) poolSelectedCompareCandidates.add(cid);
+            else poolSelectedCompareCandidates.delete(cid);
             updatePoolSelectionActions();
         });
         tr.querySelector(".pool-generate-check").addEventListener("change", e => {
-            if (e.target.checked) poolSelectedGenerateCandidates.add(c.candidate_name);
-            else poolSelectedGenerateCandidates.delete(c.candidate_name);
+            const cid = Number(c.candidate_id);
+            if (e.target.checked) poolSelectedGenerateCandidates.add(cid);
+            else poolSelectedGenerateCandidates.delete(cid);
             updatePoolSelectionActions();
         });
     });
@@ -1472,8 +1486,9 @@ function setupPoolSelectAllListeners() {
         selectAllCompare.addEventListener("change", e => {
             document.querySelectorAll(".pool-compare-check").forEach(cb => {
                 cb.checked = e.target.checked;
-                if (e.target.checked) poolSelectedCompareCandidates.add(cb.dataset.name);
-                else poolSelectedCompareCandidates.delete(cb.dataset.name);
+                const cid = Number(cb.dataset.id);
+                if (e.target.checked) poolSelectedCompareCandidates.add(cid);
+                else poolSelectedCompareCandidates.delete(cid);
             });
             updatePoolSelectionActions();
         });
@@ -1483,8 +1498,9 @@ function setupPoolSelectAllListeners() {
         selectAllGenerate.addEventListener("change", e => {
             document.querySelectorAll(".pool-generate-check").forEach(cb => {
                 cb.checked = e.target.checked;
-                if (e.target.checked) poolSelectedGenerateCandidates.add(cb.dataset.name);
-                else poolSelectedGenerateCandidates.delete(cb.dataset.name);
+                const cid = Number(cb.dataset.id);
+                if (e.target.checked) poolSelectedGenerateCandidates.add(cid);
+                else poolSelectedGenerateCandidates.delete(cid);
             });
             updatePoolSelectionActions();
         });
@@ -1516,8 +1532,9 @@ function setupAITalentSearch() {
     if (checkAll) checkAll.addEventListener("change", (e) => {
         document.querySelectorAll(".ai-result-check").forEach(cb => {
             cb.checked = e.target.checked;
-            if (e.target.checked) aiSearchSelectedCandidates.add(cb.dataset.name);
-            else aiSearchSelectedCandidates.delete(cb.dataset.name);
+            const cid = Number(cb.dataset.id);
+            if (e.target.checked) aiSearchSelectedCandidates.add(cid);
+            else aiSearchSelectedCandidates.delete(cid);
         });
         updateAISelectionActions();
     });
@@ -1610,7 +1627,7 @@ function renderSemanticSearchResults(results, query) {
         const tr = document.createElement("tr");
         tr.innerHTML = `
             <td class="checkbox-col">
-                <input type="checkbox" class="ai-result-check" data-name="${escapeHtml(c.candidate_name)}" id="ai-check-${idx}">
+                <input type="checkbox" class="ai-result-check" data-id="${c.candidate_id}" data-name="${escapeHtml(c.candidate_name)}" id="ai-check-${idx}">
             </td>
             <td style="text-align:center; font-weight:700; color:var(--muted);">#${idx + 1}</td>
             <td class="candidate-name-cell" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">${escapeHtml(c.candidate_name)}</td>
@@ -1627,8 +1644,7 @@ function renderSemanticSearchResults(results, query) {
             <td>
                 <div class="actions-cell-wrap" style="display:flex; gap:6px;">
                     <button type="button" class="btn btn-secondary compact-btn" onclick="viewCandidateProfile('${escapeHtml(c.candidate_name)}')">Profile</button>
-                    <button type="button" class="btn btn-secondary compact-btn" onclick="triggerSingleCandidateComparison('${escapeHtml(c.candidate_name)}')">Compare</button>
-                    <button type="button" class="btn btn-primary compact-btn" onclick="triggerSingleCandidateCv('${escapeHtml(c.candidate_name)}')">Generate CV</button>
+                    <button type="button" class="btn btn-primary compact-btn" onclick="triggerSingleCandidateCv(${c.candidate_id}, '${escapeHtml(c.candidate_name)}')">Generate CV</button>
                 </div>
             </td>`;
         body.appendChild(tr);
@@ -1655,8 +1671,9 @@ function renderSemanticSearchResults(results, query) {
         }
 
         tr.querySelector(".ai-result-check").addEventListener("change", (e) => {
-            if (e.target.checked) aiSearchSelectedCandidates.add(c.candidate_name);
-            else aiSearchSelectedCandidates.delete(c.candidate_name);
+            const cid = Number(c.candidate_id);
+            if (e.target.checked) aiSearchSelectedCandidates.add(cid);
+            else aiSearchSelectedCandidates.delete(cid);
             updateAISelectionActions();
         });
     });
@@ -1721,8 +1738,9 @@ async function fetchJobDescriptions() {
                         <span>By: <strong>${escapeHtml(jd.created_by || "—")}</strong></span>
                         <span>${formatToKolkataTime(jd.created_date)}</span>
                     </div>
-                    <p class="jd-body-preview">${escapeHtml(jd.description)}</p>
                 </div>
+                <p class="jd-body-preview">${escapeHtml(jd.description)}</p>
+                <div class="jd-spacer"></div>
                 <div class="jd-footer">
                     <span class="jd-matches-count" style="cursor:pointer;" onclick="viewJdMatches(${jd.jd_id}, '${escapeHtml(jd.title)}')">${jd.match_count ?? 0} Matches</span>
                     <div class="jd-actions">
@@ -2113,14 +2131,26 @@ async function triggerCandidatesComparison(selectedSet, jdText) {
     overlay.hidden = false;
 
     try {
-        const names = Array.from(selectedSet);
+        const ids = Array.from(selectedSet).map(Number);
         const res = await authedFetch(`${getApiBase()}/compare-candidates`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ candidate_names: names, jd: jdText || "General Profile Comparison" })
+            body: JSON.stringify({ candidate_ids: ids, jd: jdText || "General Profile Comparison" })
         });
 
-        if (!res.ok) throw new Error("Comparison service failed");
+        if (!res.ok) {
+            let errMsg = "Comparison service failed";
+            try {
+                const errData = await res.json();
+                if (typeof errData.detail === "string") {
+                    errMsg = errData.detail;
+                } else if (Array.isArray(errData.detail)) {
+                    errMsg = errData.detail.map(d => d.msg || JSON.stringify(d)).join("; ");
+                }
+            } catch (_) {}
+            throw new Error(errMsg);
+        }
+
         const data = await res.json();
         const results = data.results || [];
 
@@ -2166,7 +2196,7 @@ async function triggerCandidatesComparison(selectedSet, jdText) {
         table += `</tbody></table>`;
         body.innerHTML = `<div style="overflow-x:auto; padding:4px;">${table}</div>`;
 
-        document.getElementById("comparisonSubTitle").textContent = `Comparing ${names.length} candidates`;
+        document.getElementById("comparisonSubTitle").textContent = `Comparing ${ids.length} candidates`;
 
     } catch (e) {
         body.innerHTML = `<div class="empty-state error-text">Comparison failed: ${escapeHtml(e.message)}</div>`;
@@ -2177,18 +2207,35 @@ async function triggerCandidatesComparison(selectedSet, jdText) {
 //  CV GENERATION (with ZIP download)
 // ═══════════════════════════════════════════════════════
 
-async function triggerCVsZipDownload(names, jdText, triggerBtn) {
-    if (!names || names.length === 0) { showMessage("Select at least one candidate.", "error"); return; }
+async function triggerCVsZipDownload(ids, jdText, triggerBtn) {
+    if (!ids || ids.length === 0) { showMessage("Select at least one candidate.", "error"); return; }
+    // Ensure all IDs are integers before sending
+    const intIds = ids.map(id => Number(id));
+    if (intIds.some(id => isNaN(id))) { showMessage("Invalid candidate selection.", "error"); return; }
     if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = "Generating..."; }
 
     try {
         const res = await authedFetch(`${getApiBase()}/generate-selected-cvs`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ candidate_names: names, jd: jdText || "General Profile" })
+            body: JSON.stringify({ candidate_ids: intIds, jd: jdText || "General Profile" })
         });
 
-        if (!res.ok) throw new Error(await res.text() || "Generation failed");
+        if (!res.ok) {
+            // Read error body and display it — never trigger a download on failure
+            let errText;
+            try { errText = (await res.json()).detail || await res.text(); } catch { errText = await res.text(); }
+            if (Array.isArray(errText)) errText = errText.map(d => d.msg || JSON.stringify(d)).join("; ");
+            throw new Error(String(errText) || "Generation failed");
+        }
+
+        // Guard: only download if the server actually returned a ZIP
+        const contentType = res.headers.get("Content-Type") || "";
+        if (!contentType.includes("zip") && !contentType.includes("octet-stream")) {
+            const body = await res.text();
+            throw new Error(body || "Server returned an unexpected response instead of a ZIP file.");
+        }
+
         const blob = await res.blob();
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement("a");
@@ -2196,7 +2243,7 @@ async function triggerCVsZipDownload(names, jdText, triggerBtn) {
         a.download = `CVs_${new Date().toISOString().slice(0,10)}.zip`;
         a.click();
         URL.revokeObjectURL(url);
-        showMessage(`${names.length} CV(s) generated and downloading...`, "success");
+        showMessage(`${intIds.length} CV(s) generated and downloading...`, "success");
         await fetchGeneratedCvs();
 
     } catch (e) {
@@ -2286,23 +2333,30 @@ function triggerSingleCandidateComparison(name) {
     triggerCandidatesComparison(new Set([name]), jdText);
 }
 
-function triggerSingleCandidateCv(name) {
+function triggerSingleCandidateCv(candidateId, name) {
     const jdText = document.getElementById("nrJdText")?.value || "";
-    const singleSet = [name];
-    
+    // Use the integer candidate_id, not the name string
+    const intId = Number(candidateId);
+    if (!intId || isNaN(intId)) {
+        showMessage("Cannot generate CV: candidate ID is missing.", "error");
+        return;
+    }
+    const singleSet = [intId];
+
     // Switch to step 5 (CV generation step) visually
     const step5 = document.getElementById("nrStep5");
     if (step5) step5.style.display = "";
     nrShowStep(5);
-    
+
     const countEl = document.getElementById("nrGenerateCount");
     if (countEl) countEl.textContent = "1";
-    
+
     const progress = document.getElementById("nrGenerateProgress");
     const result = document.getElementById("nrGenerateResult");
     if (progress) progress.style.display = "flex";
     if (result) result.style.display = "none";
-    
+
+    // triggerCVsZipDownload handles both success (download) and failure (showMessage)
     triggerCVsZipDownload(singleSet, jdText, null).then(() => {
         if (progress) progress.style.display = "none";
         if (result) result.style.display = "block";
