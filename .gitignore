@@ -30,3 +30,12 @@ env/
 # Logs & profiling
 *.log
 profiling_log.txt
+
+# Runtime logs
+profiling_log.txt
+
+# Temporary test scripts
+test_*.py
+
+# Temporary test documents
+test*.docx
